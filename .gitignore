@@ -1,0 +1,8 @@
+__pycache__/
+.env
+
+dataset/*
+responses/*
+
+visualizations/*.csv
+visualizations/*/*.html
