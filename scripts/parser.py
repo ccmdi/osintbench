@@ -2,7 +2,6 @@ import re
 import os
 import argparse
 from dataclasses import dataclass
-from typing import Tuple
 from abc import ABC, abstractmethod
 
 @dataclass
@@ -28,7 +27,6 @@ class TemporalAnswer(Answer):
 @dataclass
 class AnalysisAnswer(Answer):
     conclusion: str
-    evidence: str = None
 
 class TaskParser(ABC):
     @abstractmethod
@@ -80,15 +78,13 @@ class TemporalParser(TaskParser):
 class AnalysisParser(TaskParser):
     def parse(self, response: str) -> AnalysisAnswer:
         conclusion_match = re.search(r'conclusion:\s*([^\n]+)', response, re.IGNORECASE)
-        evidence_match = re.search(r'evidence:\s*([^\n]+)', response, re.IGNORECASE)
         
         if not conclusion_match:
             raise ValueError("Missing conclusion in structured format")
             
         conclusion = conclusion_match.group(1).strip()
-        evidence = evidence_match.group(1).strip() if evidence_match else None
         
-        return AnalysisAnswer(conclusion=conclusion, evidence=evidence)
+        return AnalysisAnswer(conclusion=conclusion)
 
 def get_parser(task_type: str) -> TaskParser:
     parsers = {
@@ -127,13 +123,13 @@ def evaluate_answer(parsed_answer: Answer, ground_truth: dict, task_type: str) -
             )
             
             # Simple scoring based on distance
-            if distance_km <= 1:
+            if distance_km <= 0.1:
                 score = 1.0
-            elif distance_km <= 10:
+            elif distance_km <= 0.5:
                 score = 0.8
-            elif distance_km <= 100:
+            elif distance_km <= 1:
                 score = 0.5
-            elif distance_km <= 1000:
+            elif distance_km <= 10:
                 score = 0.2
             else:
                 score = 0.0
@@ -162,6 +158,10 @@ def evaluate_answer(parsed_answer: Answer, ground_truth: dict, task_type: str) -
                 'name_correct': name_correct
             }
     
+    elif task_type in ['analysis']:
+        # TODO: llm judge?
+        pass
+
     # Default fallback
     return {'score': 0.5, 'correct': False}
 

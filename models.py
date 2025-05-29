@@ -3,7 +3,7 @@ import requests
 import os
 from abc import ABC, abstractmethod
 from ratelimit import limits, sleep_and_retry
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Any
 from osintbench import Case
 
 def get_image_media_type(image_path: str) -> str:
@@ -36,22 +36,49 @@ class BaseMultimodalModel(ABC):
         self.api_key = api_key
 
     def _encode_image(self, image_path: str) -> tuple[str, str]:
+        """Encode image to base64 and return with media type."""
         media_type = get_image_media_type(image_path)
         with open(image_path, "rb") as img_file:
             img_data = base64.b64encode(img_file.read()).decode("utf-8")
         return img_data, media_type
 
-    @abstractmethod
-    def _build_headers(self) -> dict: pass
+    def _encode_case_images(self, case: Case) -> List[Tuple[str, str]]:
+        """Encode all images from a case."""
+        return [self._encode_image(image_path) for image_path in case.images]
+
+    def _format_case_info(self, case: Case) -> str:
+        """Format case information as a text string."""
+        return f"<info>{case.info}</info>"
+
+    def _format_case_tasks(self, case: Case) -> List[str]:
+        """Format case tasks as a list of text strings."""
+        return [f"<task>{task.type}: {task.prompt}</task>" for task in case.tasks]
+
+    def _build_text_content(self, prompt: str, case: Case) -> List[str]:
+        """Build the text content components for a case."""
+        content = [prompt, self._format_case_info(case)]
+        content.extend(self._format_case_tasks(case))
+        return content
 
     @abstractmethod
-    def _build_payload(self, prompt: str, info: str, imgs: List[Tuple[str, str]]) -> dict: pass
+    def _build_headers(self) -> dict: 
+        """Build request headers specific to the client."""
+        pass
 
     @abstractmethod
-    def _get_endpoint(self) -> str: pass
+    def _build_payload(self, text_content: List[str], encoded_images: List[Tuple[str, str]]) -> dict: 
+        """Build the API payload using text content and encoded images."""
+        pass
 
     @abstractmethod
-    def _extract_response_text(self, response: requests.Response) -> str: pass
+    def _get_endpoint(self) -> str: 
+        """Get the API endpoint URL."""
+        pass
+
+    @abstractmethod
+    def _extract_response_text(self, response: requests.Response) -> str: 
+        """Extract text from the API response."""
+        pass
 
     def query(self, prompt: str, case: Case, run_folder: str = None) -> str:
         """
@@ -59,10 +86,17 @@ class BaseMultimodalModel(ABC):
         """
 
         def api():
-            imgs = [self._encode_image(image_path) for image_path in case.images]
+            # Encode images and build text content using base class methods
+            encoded_images = self._encode_case_images(case)
+            text_content = self._build_text_content(prompt, case)
+            print(case.tasks)
+            print(text_content)
+            
+            # Use client-specific methods for headers, payload, and endpoint
             headers = self._build_headers()
-            payload = self._build_payload(prompt, f"<info>{case.info}</info>", imgs)
+            payload = self._build_payload(text_content, encoded_images)
             endpoint = self._get_endpoint()
+            
             try:
                 response = requests.post(endpoint, headers=headers, json=payload)
                 response.raise_for_status()
@@ -74,7 +108,7 @@ class BaseMultimodalModel(ABC):
             except requests.exceptions.RequestException as e:
                 status_code = e.response.status_code if e.response is not None else "N/A"
                 error_text = e.response.text if e.response is not None else str(e)
-                print(f"API error ({status_code}) for {self.name}: {error_text[:100]}...")
+                print(f"API error ({status_code}) for {self.name}: {error_text}...")
                 raise Exception(f"{self.name} API error ({status_code})") from e
             except Exception as e:
                 print(f"Unexpected error in {self.name} core logic: {str(e)}")
@@ -85,7 +119,6 @@ class BaseMultimodalModel(ABC):
         )
 
         return call()
-
 
 
 class AnthropicClient(BaseMultimodalModel):
@@ -109,17 +142,29 @@ class AnthropicClient(BaseMultimodalModel):
              headers["anthropic-beta"] = effective_beta_header
         return headers
 
-    def _build_payload(self, prompt: str, info: str, imgs: List[Tuple[str, str]]) -> dict:
+    def _build_payload(self, text_content: List[str], encoded_images: List[Tuple[str, str]]) -> dict:
+        # Build content list from text content and images
+        content = []
+        for text in text_content:
+            content.append({"type": "text", "text": text})
+        
+        for img_data, media_type in encoded_images:
+            content.append({
+                "type": "image", 
+                "source": {
+                    "type": "base64", 
+                    "media_type": media_type, 
+                    "data": img_data
+                }
+            })
+
         payload = {
             "model": self.model_identifier,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
-            "messages": [{"role": "user", "content": [
-                {"type": "text", "text": prompt},
-                {"type": "text", "text": info},
-                {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": img_data}} for media_type, img_data in imgs
-            ]}]
+            "messages": [{"role": "user", "content": content}]
         }
+        
         if self.enable_thinking:
             payload["thinking"] = {"type": "enabled", "budget_tokens": self.max_tokens - 512}
             if "temperature" in payload:
@@ -157,13 +202,22 @@ class GoogleClient(BaseMultimodalModel):
     def _build_headers(self) -> dict:
         return {"Content-Type": "application/json"}
 
-    def _build_payload(self, prompt: str, info: str, imgs: List[Tuple[str, str]]) -> dict:
+    def _build_payload(self, text_content: List[str], encoded_images: List[Tuple[str, str]]) -> dict:
+        # Build parts list from text content and images
+        parts = []
+        for text in text_content:
+            parts.append({"text": text})
+        
+        for img_data, media_type in encoded_images:
+            parts.append({
+                "inline_data": {
+                    "mime_type": media_type, 
+                    "data": img_data
+                }
+            })
+
         payload = {
-            "contents": [{"parts": [
-                {"text": prompt},
-                {"text": info},
-                {"inline_data": {"mime_type": media_type, "data": img_data}} for media_type, img_data in imgs
-            ]}],
+            "contents": [{"parts": parts}],
             "generationConfig": {
                 "temperature": self.temperature,
                 "maxOutputTokens": self.max_tokens
@@ -198,31 +252,26 @@ class OpenAIClient(BaseMultimodalModel):
     def _build_headers(self) -> dict:
         return {"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"}
 
-    def _build_payload(self, prompt: str, info: str, imgs: List[Tuple[str, str]]) -> dict:
-        def _build_image(media_type: str, img_data: str) -> dict:
+    def _build_payload(self, text_content: List[str], encoded_images: List[Tuple[str, str]]) -> dict:
+        # Build content list from text content and images
+        content = []
+        for text in text_content:
+            content.append({"type": "input_text", "text": text})
+        
+        for img_data, media_type in encoded_images:
             image_url = f"data:{media_type};base64,{img_data}"
-
             image_content = {
                 "type": "input_image",
                 "image_url": image_url
             }
-
             if self.detail:
                 image_content["detail"] = self.detail
-
-            return image_content
+            content.append(image_content)
 
         payload = {
             "model": self.model_identifier,
-            "input": [
-                {"role": "user", "content": [
-                    {"type": "input_text", "text": prompt},
-                    {"type": "input_text", "text": info},
-                    *[_build_image(media_type, img_data) for media_type, img_data in imgs]
-                ]}
-             ],
+            "input": [{"role": "user", "content": content}],
         }
-
 
         if hasattr(self, 'temperature') and self.temperature >= 0:
              payload["temperature"] = self.temperature
@@ -273,28 +322,26 @@ class OpenRouterClient(BaseMultimodalModel):
             "HTTP-Referer": self.referer_url
         }
 
-    def _build_payload(self, prompt: str, info: str, imgs: List[Tuple[str, str]]) -> dict:
-        def _build_image(media_type: str, img_data: str) -> dict:
+    def _build_payload(self, text_content: List[str], encoded_images: List[Tuple[str, str]]) -> dict:
+        # Build content list from text content and images
+        content = []
+        for text in text_content:
+            content.append({"type": "text", "text": text})
+        
+        for img_data, media_type in encoded_images:
             image_url = f"data:{media_type};base64,{img_data}"
-
             image_content = {
                 "type": "input_image",
                 "image_url": image_url
             }
-
             if self.detail:
                 image_content["detail"] = self.detail
-
-            return image_content
+            content.append(image_content)
         
         return {
             "model": self.model_identifier,
             "max_tokens": self.max_tokens,
-            "messages": [{"role": "user", "content": [
-                {"type": "text", "text": prompt},
-                {"type": "text", "text": info},
-                *[_build_image(media_type, img_data) for media_type, img_data in imgs]
-            ]}],
+            "messages": [{"role": "user", "content": content}],
             "temperature": self.temperature
         }
 
@@ -318,15 +365,15 @@ class Claude3_7SonnetThinking(AnthropicClient):
     beta_header = "output-128k-2025-02-19"
 class Claude4SonnetThinking(AnthropicClient):
     name = "Claude 4 Sonnet (Thinking)"
-    model_identifier = "claude-4-sonnet-20250522"
+    model_identifier = "claude-sonnet-4-20250514"
     enable_thinking = True
-    rate_limit = 4
+    rate_limit = 2
     beta_header = "output-128k-2025-02-19"
 class Claude4OpusThinking(AnthropicClient):
     name = "Claude 4 Opus (Thinking)"
-    model_identifier = "claude-4-opus-20250522"
+    model_identifier = "claude-opus-4-20250514"
     enable_thinking = True
-    rate_limit = 4
+    rate_limit = 2
     beta_header = "output-128k-2025-02-19"
 
 

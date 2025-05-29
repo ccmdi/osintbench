@@ -7,11 +7,12 @@ import datetime
 import argparse
 from dotenv import load_dotenv
 
-from scripts.parser import parse_response, evaluate_answer
+from scripts.parser import parse_response, Answer, evaluate_answer
 
 SYSTEM_PROMPT = """
 <system>
-You are participating in an OSINT (Open Source Intelligence) challenge.
+You are participating in an OSINT challenge. You are given task(s) that you must provide answers to using the provided evidence and any tools you have available.
+For instance, you have access to Google Search, which may be required to answer the question.
 
 Take your time to reason through the evidence. Your final answer MUST be in structured format:
 
@@ -29,11 +30,8 @@ time: [HH:MM or time period if applicable]
 
 FOR ANALYSIS TASKS:
 conclusion: [main conclusion]
-evidence: [key evidence points]
 
-You can provide reasoning above the structured answer, but the structured format MUST be included.
-
-You have access to Google Search, which you should use to improve your answer.
+You must provide a structured answer for each task, BUT you should only provide a structured format for the task types you are given. For instance, do not provide a temporal task answer if there is not a temporal task.
 </system>
 """
 
@@ -61,19 +59,9 @@ class Case:
 @dataclass
 class BenchmarkResult:
     case_obj: Case
-    answers: Dict[Task, Any]
-    accuracy: float = 0.0
+    answers: List[Answer] = None  # List of parsed answers
     refused: bool = False
     error_message: Optional[str] = None
-    
-    def calculate_metrics(self):
-        if self.refused or self.answers is None:
-            return
-        
-        for task in self.case_obj.tasks:
-            answer = self.answers[task]
-            ground_truth = task.answer
-            self.accuracy += evaluate_answer(answer, ground_truth, task.type)
 
 class OsintBenchmark:
     def __init__(self, 
@@ -108,12 +96,21 @@ class OsintBenchmark:
             data = json.load(f)
             
         cases = []
-        for item in data['tasks']:
+        for case in data['cases']:
+            tasks = [Task(
+                type=task['type'],
+                prompt=task['prompt'], 
+                answer=task['answer']
+            ) for task in case['tasks']]
+            
+            # Fix image paths to be relative to dataset directory
+            full_image_paths = [os.path.join(self.dataset_path, img_path) for img_path in case["images"]]
+            
             cases.append(Case(
-                case_id=item["id"],
-                images=item["images"],
-                info=item["info"],
-                tasks=item["tasks"]
+                case_id=case["id"],
+                images=full_image_paths,
+                info=case["info"],
+                tasks=tasks
             ))
         return cases
     
@@ -121,7 +118,7 @@ class OsintBenchmark:
         cases_to_test = self.cases
 
         if args.sample_id is not None:
-            cases_to_test = [case for case in self.cases if case.case_id == str(args.sample_id)]
+            cases_to_test = [case for case in self.cases if case.case_id == args.sample_id]
             if not cases_to_test:
                 raise ValueError(f"Case ID '{args.sample_id}' not found in dataset")
         elif args.samples and args.samples < len(self.cases):
@@ -159,15 +156,15 @@ class OsintBenchmark:
                     answers = []
                     for task in case.tasks:
                         answers.append(parse_response(response, task.type))
+                    print(answers)
                     
-                    result = BenchmarkResult(case=case, answers=answers)
-                    result.calculate_metrics()
+                    result = BenchmarkResult(case_obj=case, answers=answers)
                     return result
                 except ValueError as parse_error:
                     print(f"  Format error (attempt {attempt+1}): {str(parse_error)}")
                     if "missing required fields" in str(parse_error) or "parse" in str(parse_error):
                         return BenchmarkResult(
-                            case=case, 
+                            case_obj=case, 
                             answers=None, 
                             refused=True,
                             error_message=f"Format error: {str(parse_error)}"
@@ -181,14 +178,14 @@ class OsintBenchmark:
                     continue
                 
                 return BenchmarkResult(
-                    case=case, 
+                    case_obj=case, 
                     answers=None, 
                     refused=True,
                     error_message=error_msg
                 )
         
         return BenchmarkResult(
-            case=case, 
+            case_obj=case, 
             answers=None,
             refused=True,
             error_message="Max retries exceeded"
@@ -198,11 +195,32 @@ class OsintBenchmark:
         total = len(self.results)
         refusals = sum(1 for r in self.results if r.refused)
         
+        # Calculate average accuracy across all tasks
+        total_tasks = 0
+        total_score = 0
+        correct_tasks = 0
+        
+        for r in self.results:
+            if not r.refused and r.answers:
+                for i, task in enumerate(r.case_obj.tasks):
+                    if i < len(r.answers):
+                        evaluation = evaluate_answer(r.answers[i], task.answer, task.type)
+                        total_tasks += 1
+                        total_score += evaluation['score']
+                        if evaluation['correct']:
+                            correct_tasks += 1
+        
+        avg_accuracy = total_score / total_tasks if total_tasks > 0 else 0
+        accuracy_rate = correct_tasks / total_tasks if total_tasks > 0 else 0
+        
         return {
             "model": self.model.name,
             "test": os.path.basename(self.dataset_path),
             "n": total,
+            "total_tasks": total_tasks,
             "refusal_rate": refusals / total if total > 0 else 0,
+            "avg_accuracy": avg_accuracy,
+            "accuracy_rate": accuracy_rate,
             "detailed_results": self.results
         }
     
@@ -216,14 +234,41 @@ class OsintBenchmark:
         
         records = []
         for r in self.results:
-            record = {
-                "case_id": r.case.case_id,
-                "accuracy": r.accuracy,
-                "refused": r.refused,
-                "error_message": r.error_message
-            }
-                
-            records.append(record)
+            if r.refused:
+                records.append({
+                    "case_id": r.case_obj.case_id,
+                    "task_type": "unknown",
+                    "refused": True,
+                    "error_message": r.error_message,
+                    "score": None,
+                    "correct": None
+                })
+            else:
+                # Handle each task in the case
+                for i, task in enumerate(r.case_obj.tasks):
+                    if i < len(r.answers):
+                        parsed_answer = r.answers[i]
+                        evaluation = evaluate_answer(parsed_answer, task.answer, task.type)
+                        
+                        record = {
+                            "case_id": r.case_obj.case_id,
+                            "task_type": task.type,
+                            "refused": False,
+                            "error_message": None,
+                            "score": evaluation['score'],
+                            "correct": evaluation['correct']
+                        }
+                        records.append(record)
+                    else:
+                        # Missing answer for this task
+                        records.append({
+                            "case_id": r.case_obj.case_id,
+                            "task_type": task.type,
+                            "refused": True,
+                            "error_message": "No answer parsed for this task",
+                            "score": 0.0,
+                            "correct": False
+                        })
             
         pd.DataFrame(records).to_csv(f"{output_path}detailed.csv", index=False)
 
@@ -234,8 +279,8 @@ if __name__ == "__main__":
     parser.add_argument("--samples", "-n", type=int, default=None,
                         help="Number of samples to test (default: all)")
     parser.add_argument("--sample-id", "-i", type=int, default=None, help="Run a specific sample by ID")
-    parser.add_argument("--model", "-m", type=str, default="Gemini2_5Pro",
-                        help="Model to use (default: 'Gemini2_5Pro')")
+    parser.add_argument("--model", "-m", type=str, default="Claude3_7Sonnet",
+                        help="Model to use (default: 'Claude3_7Sonnet')")
     parser.add_argument("--max-retries", type=int, default=3,
                         help="Maximum number of retries for API/network errors (default: 3)")
     args = parser.parse_args()
@@ -256,4 +301,7 @@ if __name__ == "__main__":
     benchmark.save_results(run_folder + "/results/")
     
     print(f"Total samples: {results['n']}")
+    print(f"Total tasks: {results['total_tasks']}")
     print(f"Refusal rate: {results['refusal_rate']:.2%}")
+    print(f"Average accuracy: {results['avg_accuracy']:.3f}")
+    print(f"Accuracy rate: {results['accuracy_rate']:.2%}")
