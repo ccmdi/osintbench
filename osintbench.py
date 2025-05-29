@@ -29,7 +29,7 @@ date: [YYYY-MM-DD or descriptive period]
 time: [HH:MM or time period if applicable]
 
 FOR ANALYSIS TASKS:
-conclusion: [main conclusion]
+conclusion: [conclusion to a question - must be ONE answer, no hedging]
 
 You must provide a structured answer for each task, BUT you should only provide a structured format for the task types you are given. For instance, do not provide a temporal task answer if there is not a temporal task.
 </system>
@@ -51,10 +51,6 @@ class Case:
     images: List[str]
     info: str
     tasks: List[Task]
-    
-    @property
-    def coordinates(self) -> Tuple[float, float]:
-        return (self.lat, self.lng)
     
 @dataclass
 class BenchmarkResult:
@@ -103,7 +99,7 @@ class OsintBenchmark:
                 answer=task['answer']
             ) for task in case['tasks']]
             
-            # Fix image paths to be relative to dataset directory
+            # Fix image paths to be relative to dataset directory TODO bad LLM stupid fuck
             full_image_paths = [os.path.join(self.dataset_path, img_path) for img_path in case["images"]]
             
             cases.append(Case(
@@ -253,6 +249,8 @@ class OsintBenchmark:
                         record = {
                             "case_id": r.case_obj.case_id,
                             "task_type": task.type,
+                            "prompt": task.prompt,
+                            "answer": task.answer,
                             "refused": False,
                             "error_message": None,
                             "score": evaluation['score'],
@@ -264,6 +262,8 @@ class OsintBenchmark:
                         records.append({
                             "case_id": r.case_obj.case_id,
                             "task_type": task.type,
+                            "prompt": task.prompt,
+                            "answer": task.answer,
                             "refused": True,
                             "error_message": "No answer parsed for this task",
                             "score": 0.0,
