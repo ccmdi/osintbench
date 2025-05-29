@@ -3,50 +3,167 @@ import os
 import argparse
 from dataclasses import dataclass
 from typing import Tuple
+from abc import ABC, abstractmethod
 
 @dataclass
-class Guess:
+class Answer:
+    """Base class for all answer types"""
+    pass
+
+@dataclass
+class LocationAnswer(Answer):
     lat: float
     lng: float
-    
-    @property
-    def coordinates(self) -> Tuple[float, float]:
-        return (self.lat, self.lng)
 
-def parse_response(response: str) -> Guess:
-    # Look for the final answer section that matches the required format
-    final_answer_match = re.search(
-        # Latitude part:
-        r"(?:^|\n)(?:\*\*)?(?:lat|Lat)(?:\*\*)?:\s*"          # Keyword (optionally **keyword**), colon, initial space
-        r"(\*+)?\s*([-+]?\d+\.?\d*?)\s*(\*+)?"              # Optional value wrapper (* or ** etc.), internal spaces, lat number, internal spaces, optional value wrapper
-        r"\s*(?:\n|$)"                                      # Trailing space and newline/end
-        # Separator:
-        r".*?"
-        # Longitude part:
-        r"(?:^|\n)(?:\*\*)?(?:lng|Lng)(?:\*\*)?:\s*"          # Keyword (optionally **keyword**), colon, initial space
-        r"(\*+)?\s*([-+]?\d+\.?\d*?)\s*(\*+)?"              # Optional value wrapper (* or ** etc.), internal spaces, lng number, internal spaces, optional value wrapper
-        r"\s*(?:\n|$)",                                     # Trailing space and newline/end
-        response,
-        re.MULTILINE | re.DOTALL
-    )
-    if not final_answer_match:
-        raise ValueError("Response missing required fields in final answer format")
+@dataclass
+class IdentificationAnswer(Answer):
+    entity_type: str
+    name: str = None
 
-    try:
-        lat_str = final_answer_match.group(2).strip() # Lat number is now group 2
-        lng_str = final_answer_match.group(5).strip() # Lng number is now group 5
-        
-        lat = float(lat_str)
-        lng = float(lng_str)
-    except (AttributeError, IndexError, ValueError) as e:
-        raise ValueError(f"Failed to parse final answer: {e}")
+@dataclass
+class TemporalAnswer(Answer):
+    date: str = None
+    time: str = None
     
-    if not -90 <= lat <= 90:
-        raise ValueError(f"Invalid latitude value: {lat} (must be between -90 and 90)")
-    if not -180 <= lng <= 180:
-        raise ValueError(f"Invalid longitude value: {lng} (must be between -180 and 180)")
+@dataclass
+class AnalysisAnswer(Answer):
+    conclusion: str
+    evidence: str = None
+
+class TaskParser(ABC):
+    @abstractmethod
+    def parse(self, response: str) -> Answer:
+        pass
+
+class LocationParser(TaskParser):
+    def parse(self, response: str) -> LocationAnswer:
+        lat_match = re.search(r'lat:\s*([-+]?\d+\.?\d*)', response, re.IGNORECASE)
+        lng_match = re.search(r'lng:\s*([-+]?\d+\.?\d*)', response, re.IGNORECASE)
         
-    return Guess(lat=lat, lng=lng)
+        if not lat_match or not lng_match:
+            raise ValueError("Missing lat/lng in structured format")
+            
+        lat = float(lat_match.group(1))
+        lng = float(lng_match.group(1))
+        
+        if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
+            raise ValueError(f"Invalid coordinates: lat={lat}, lng={lng}")
+            
+        return LocationAnswer(lat=lat, lng=lng)
+
+class IdentificationParser(TaskParser):
+    def parse(self, response: str) -> IdentificationAnswer:
+        type_match = re.search(r'type:\s*([^\n]+)', response, re.IGNORECASE)
+        name_match = re.search(r'name:\s*([^\n]+)', response, re.IGNORECASE)
+        
+        if not type_match:
+            raise ValueError("Missing type in structured format")
+            
+        entity_type = type_match.group(1).strip()
+        name = name_match.group(1).strip() if name_match else None
+        
+        return IdentificationAnswer(entity_type=entity_type, name=name)
+
+class TemporalParser(TaskParser):
+    def parse(self, response: str) -> TemporalAnswer:
+        date_match = re.search(r'date:\s*([^\n]+)', response, re.IGNORECASE)
+        time_match = re.search(r'time:\s*([^\n]+)', response, re.IGNORECASE)
+        
+        date = date_match.group(1).strip() if date_match else None
+        time = time_match.group(1).strip() if time_match else None
+        
+        if not date:
+            raise ValueError("Missing date in structured format")
+            
+        return TemporalAnswer(date=date, time=time)
+
+class AnalysisParser(TaskParser):
+    def parse(self, response: str) -> AnalysisAnswer:
+        conclusion_match = re.search(r'conclusion:\s*([^\n]+)', response, re.IGNORECASE)
+        evidence_match = re.search(r'evidence:\s*([^\n]+)', response, re.IGNORECASE)
+        
+        if not conclusion_match:
+            raise ValueError("Missing conclusion in structured format")
+            
+        conclusion = conclusion_match.group(1).strip()
+        evidence = evidence_match.group(1).strip() if evidence_match else None
+        
+        return AnalysisAnswer(conclusion=conclusion, evidence=evidence)
+
+def get_parser(task_type: str) -> TaskParser:
+    parsers = {
+        'location': LocationParser(),
+        'geolocation': LocationParser(),
+        'identification': IdentificationParser(),
+        'person_id': IdentificationParser(),
+        'object_id': IdentificationParser(),
+        'temporal': TemporalParser(),
+        'date': TemporalParser(),
+        'time': TemporalParser(),
+        'analysis': AnalysisParser(),
+    }
+    
+    if task_type not in parsers:
+        # Default to location for backward compatibility
+        return LocationParser()
+    
+    return parsers[task_type]
+
+def parse_response(response: str, task_type: str = "location") -> Answer:
+    """Parse structured response based on task type"""
+    parser = get_parser(task_type)
+    return parser.parse(response)
+
+# Simple evaluation functions
+def evaluate_answer(parsed_answer: Answer, ground_truth: dict, task_type: str) -> dict:
+    """Simple evaluation - returns score and whether it's correct"""
+    
+    if task_type in ['location', 'geolocation']:
+        if isinstance(parsed_answer, LocationAnswer):
+            import haversine
+            distance_km = haversine.haversine(
+                (parsed_answer.lat, parsed_answer.lng),
+                (ground_truth['lat'], ground_truth['lng'])
+            )
+            
+            # Simple scoring based on distance
+            if distance_km <= 1:
+                score = 1.0
+            elif distance_km <= 10:
+                score = 0.8
+            elif distance_km <= 100:
+                score = 0.5
+            elif distance_km <= 1000:
+                score = 0.2
+            else:
+                score = 0.0
+                
+            return {
+                'score': score,
+                'correct': score >= 0.8,
+                'distance_km': distance_km
+            }
+    
+    elif task_type in ['identification', 'person_id', 'object_id']:
+        if isinstance(parsed_answer, IdentificationAnswer):
+            type_correct = (ground_truth.get('type', '').lower() in parsed_answer.entity_type.lower() or
+                           parsed_answer.entity_type.lower() in ground_truth.get('type', '').lower())
+            
+            name_correct = True
+            if ground_truth.get('name') and parsed_answer.name:
+                name_correct = (ground_truth['name'].lower() in parsed_answer.name.lower() or
+                               parsed_answer.name.lower() in ground_truth['name'].lower())
+            
+            score = 1.0 if (type_correct and name_correct) else 0.0
+            return {
+                'score': score,
+                'correct': score == 1.0,
+                'type_correct': type_correct,
+                'name_correct': name_correct
+            }
+    
+    # Default fallback
+    return {'score': 0.5, 'correct': False}
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Parse model responses and count valid ones.")

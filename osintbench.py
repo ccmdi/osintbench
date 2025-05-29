@@ -1,28 +1,40 @@
 import os
 import json
-import math
 import pandas as pd
-import re
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass
 import datetime
 import argparse
-import haversine
 from dotenv import load_dotenv
 
-from scripts.parser import parse_response, Guess
+from scripts.parser import parse_response, evaluate_answer
 
 SYSTEM_PROMPT = """
-You are participating in a geolocation challenge.
+<system>
+You are participating in an OSINT (Open Source Intelligence) challenge.
 
-Take your time to reason through the evidence. Your final answer MUST include these three lines somewhere in your response:
+Take your time to reason through the evidence. Your final answer MUST be in structured format:
 
-lat: [latitude as a decimal number]
-lng: [longitude as a decimal number]
+FOR LOCATION TASKS:
+lat: [latitude as decimal number]
+lng: [longitude as decimal number]
 
-You can provide additional reasoning or explanation, but these three specific lines MUST be included.
+FOR IDENTIFICATION TASKS:
+type: [entity type - person/organization/vehicle/etc]
+name: [specific name if identifiable]
 
- You have access to Google Search, which you should use to improve your answer.
+FOR TEMPORAL TASKS:
+date: [YYYY-MM-DD or descriptive period]
+time: [HH:MM or time period if applicable]
+
+FOR ANALYSIS TASKS:
+conclusion: [main conclusion]
+evidence: [key evidence points]
+
+You can provide reasoning above the structured answer, but the structured format MUST be included.
+
+You have access to Google Search, which you should use to improve your answer.
+</system>
 """
 
 from models import *
@@ -30,11 +42,17 @@ from models import *
 load_dotenv()
 
 @dataclass
-class Location:
-    location_id: int
+class Task:
+    type: str
+    prompt: str
+    answer: Any
+
+@dataclass
+class Case:
+    case_id: int
     images: List[str]
-    lat: float
-    lng: float
+    info: str
+    tasks: List[Task]
     
     @property
     def coordinates(self) -> Tuple[float, float]:
@@ -42,30 +60,29 @@ class Location:
     
 @dataclass
 class BenchmarkResult:
-    location: Location
-    guess: Optional[Guess]
-    distance_km: Optional[float] = None
+    case_obj: Case
+    answers: Dict[Task, Any]
+    accuracy: float = 0.0
     refused: bool = False
     error_message: Optional[str] = None
     
     def calculate_metrics(self):
-        if self.refused or self.guess is None:
-            self.distance_km = None
+        if self.refused or self.answers is None:
             return
-            
-        self.distance_km = haversine.haversine(
-            self.location.coordinates, 
-            self.guess.coordinates
-        )
+        
+        for task in self.case_obj.tasks:
+            answer = self.answers[task]
+            ground_truth = task.answer
+            self.accuracy += evaluate_answer(answer, ground_truth, task.type)
 
-class GeoGuessrBenchmark:
+class OsintBenchmark:
     def __init__(self, 
                  dataset_path: str,
                  model: str = "ClaudeHaiku",
                  api_key: Optional[str] = None,
                  max_retries: int = 3):
         self.dataset_path = dataset_path
-        self.locations = self._load_dataset()
+        self.cases = self._load_dataset()
         self.results = []
         self.max_retries = max_retries
         
@@ -86,69 +103,72 @@ class GeoGuessrBenchmark:
         except KeyError:
             raise ValueError(f"Unknown model provider: {model}. Make sure the class is defined.")
         
-    def _load_dataset(self) -> List[Location]:
+    def _load_dataset(self) -> List[Case]:
         with open(os.path.join(self.dataset_path, "metadata.json"), "r") as f:
             data = json.load(f)
             
-        locations = []
-        for item in data['images']:
-            locations.append(Location(
-                location_id=item["id"],
+        cases = []
+        for item in data['tasks']:
+            cases.append(Case(
+                case_id=item["id"],
                 images=item["images"],
-                lat=item["lat"],
-                lng=item["lng"]
+                info=item["info"],
+                tasks=item["tasks"]
             ))
-        return locations
+        return cases
     
     def run_benchmark(self, args) -> Dict:
-        locations_to_test = self.locations
+        cases_to_test = self.cases
 
         if args.sample_id is not None:
-            locations_to_test = [loc for loc in self.locations if loc.location_id == str(args.sample_id)]
-            if not locations_to_test:
-                raise ValueError(f"Location ID '{args.sample_id}' not found in dataset")
-        elif args.samples and args.samples < len(self.locations):
+            cases_to_test = [case for case in self.cases if case.case_id == str(args.sample_id)]
+            if not cases_to_test:
+                raise ValueError(f"Case ID '{args.sample_id}' not found in dataset")
+        elif args.samples and args.samples < len(self.cases):
             import random
-            locations_to_test = random.sample(self.locations, args.samples)
+            cases_to_test = random.sample(self.cases, args.samples)
                 
         self.results = []
         
-        for location in locations_to_test:
-            print(f"Testing location: {location.location_id}")
-            result = self._evaluate_location(location)
+        for case in cases_to_test:
+            print(f"Testing case: {case.case_id}")
+            result = self._evaluate_case(case)
             self.results.append(result)
             
             if result.refused:
                 print(f"REFUSED: {result.error_message}")
             else:
-                distance = f"{result.distance_km:.1f}km" if result.distance_km is not None else "N/A"
-                print(f"Distance: {distance}")
+                #TODO: ACCURACY
+                pass
             
-            self._save_incremental_results(run_folder + "/results/")
+            self.save_results(run_folder + "/results/")
         
         return self._compile_results()
     
-    def _evaluate_location(self, location: Location) -> BenchmarkResult:
+    def _evaluate_case(self, case: Case) -> BenchmarkResult:
         for attempt in range(self.max_retries):
             try:
-                response = self.model.query(location.images, SYSTEM_PROMPT, run_folder, location.location_id)
+                response = self.model.query(SYSTEM_PROMPT, case, run_folder)
                 
                 os.makedirs(f"{run_folder}/output/", exist_ok=True)
                 
-                with open(f"{run_folder}/output/{location.location_id}.txt", "w", encoding="utf-8") as f:
+                with open(f"{run_folder}/output/{case.case_id}.txt", "w", encoding="utf-8") as f:
                     f.write(response)
                 
                 try:
-                    guess = parse_response(response)
-                    result = BenchmarkResult(location=location, guess=guess)
+                    answers = []
+                    for task in case.tasks:
+                        answers.append(parse_response(response, task.type))
+                    
+                    result = BenchmarkResult(case=case, answers=answers)
                     result.calculate_metrics()
                     return result
                 except ValueError as parse_error:
                     print(f"  Format error (attempt {attempt+1}): {str(parse_error)}")
                     if "missing required fields" in str(parse_error) or "parse" in str(parse_error):
                         return BenchmarkResult(
-                            location=location, 
-                            guess=None, 
+                            case=case, 
+                            answers=None, 
                             refused=True,
                             error_message=f"Format error: {str(parse_error)}"
                         )
@@ -161,15 +181,15 @@ class GeoGuessrBenchmark:
                     continue
                 
                 return BenchmarkResult(
-                    location=location, 
-                    guess=None, 
+                    case=case, 
+                    answers=None, 
                     refused=True,
                     error_message=error_msg
                 )
         
         return BenchmarkResult(
-            location=location, 
-            guess=None, 
+            case=case, 
+            answers=None,
             refused=True,
             error_message="Max retries exceeded"
         )
@@ -178,17 +198,11 @@ class GeoGuessrBenchmark:
         total = len(self.results)
         refusals = sum(1 for r in self.results if r.refused)
         
-        valid_results = [r for r in self.results if not r.refused]
-        avg_distance = sum(r.distance_km for r in valid_results) / len(valid_results) if valid_results else None
-        median_distance = sorted(r.distance_km for r in valid_results)[len(valid_results) // 2] if valid_results else None
-        
         return {
             "model": self.model.name,
             "test": os.path.basename(self.dataset_path),
             "n": total,
             "refusal_rate": refusals / total if total > 0 else 0,
-            "average_distance_km": avg_distance,
-            "median_distance_km": median_distance,
             "detailed_results": self.results
         }
     
@@ -203,68 +217,32 @@ class GeoGuessrBenchmark:
         records = []
         for r in self.results:
             record = {
-                "location_id": r.location.location_id,
-                "lat_true": r.location.lat,
-                "lng_true": r.location.lng,
+                "case_id": r.case.case_id,
+                "accuracy": r.accuracy,
                 "refused": r.refused,
                 "error_message": r.error_message
             }
-            
-            if not r.refused and r.guess:
-                record.update({
-                    "lat_guess": r.guess.lat,
-                    "lng_guess": r.guess.lng,
-                    "distance_km": r.distance_km
-                })
                 
             records.append(record)
             
         pd.DataFrame(records).to_csv(f"{output_path}detailed.csv", index=False)
-    
-    def _save_incremental_results(self, output_path: str):
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        
-        records = []
-        for r in self.results:
-            record = {
-                "location_id": r.location.location_id,
-                "lat_true": r.location.lat,
-                "lng_true": r.location.lng,
-                "refused": r.refused,
-                "error_message": r.error_message
-            }
-            
-            if not r.refused and r.guess:
-                record.update({
-                    "lat_guess": r.guess.lat,
-                    "lng_guess": r.guess.lng,
-                    "distance_km": r.distance_km
-                })
-                
-            records.append(record)
-            
-        pd.DataFrame(records).to_csv(f"{output_path}detailed.csv", index=False)
-        
-        results_dict = self._compile_results()
-        with open(f"{output_path}summary.json", "w") as f:
-            json.dump({k: v for k, v in results_dict.items() if k != "detailed_results"}, f, indent=2)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="GeoGuessr Benchmark Tool")
-    parser.add_argument("--dataset", "-d", type=str, default="acw", 
-                        help="Dataset subfolder to use (default: 'acw')")
+    parser = argparse.ArgumentParser(description="OSINT Benchmark Tool")
+    parser.add_argument("--dataset", "-d", type=str, default="basic", 
+                        help="Dataset subfolder to use (default: 'basic')")
     parser.add_argument("--samples", "-n", type=int, default=None,
                         help="Number of samples to test (default: all)")
     parser.add_argument("--sample-id", "-i", type=int, default=None, help="Run a specific sample by ID")
-    parser.add_argument("--model", "-m", type=str, default="claude",
-                        help="Model provider to use (default: 'claude')")
+    parser.add_argument("--model", "-m", type=str, default="Gemini2_5Pro",
+                        help="Model to use (default: 'Gemini2_5Pro')")
     parser.add_argument("--max-retries", type=int, default=3,
                         help="Maximum number of retries for API/network errors (default: 3)")
     args = parser.parse_args()
     
     dataset_path = f"dataset/{args.dataset}"
 
-    benchmark = GeoGuessrBenchmark(
+    benchmark = OsintBenchmark(
         dataset_path=dataset_path,
         model=args.model,
         max_retries=args.max_retries
@@ -278,5 +256,4 @@ if __name__ == "__main__":
     benchmark.save_results(run_folder + "/results/")
     
     print(f"Total samples: {results['n']}")
-    print(f"Average distance: {results['average_distance_km']:.1f} km")
     print(f"Refusal rate: {results['refusal_rate']:.2%}")
