@@ -62,7 +62,7 @@ class BenchmarkResult:
 class OsintBenchmark:
     def __init__(self, 
                  dataset_path: str,
-                 model: str = "ClaudeHaiku",
+                 model: str = "Claude4SonnetThinking",
                  api_key: Optional[str] = None,
                  max_retries: int = 3):
         self.dataset_path = dataset_path
@@ -191,23 +191,16 @@ class OsintBenchmark:
         total = len(self.results)
         refusals = sum(1 for r in self.results if r.refused)
         
-        # Calculate average accuracy across all tasks
-        total_tasks = 0
-        total_score = 0
-        correct_tasks = 0
+        total_tasks = correct_tasks = total_score = 0
         
         for r in self.results:
             if not r.refused and r.answers:
                 for i, task in enumerate(r.case_obj.tasks):
                     if i < len(r.answers):
-                        evaluation = evaluate_answer(r.answers[i], task.answer, task.type)
+                        eval_result = evaluate_answer(r.answers[i], task.answer, task.type)
                         total_tasks += 1
-                        total_score += evaluation['score']
-                        if evaluation['correct']:
-                            correct_tasks += 1
-        
-        avg_accuracy = total_score / total_tasks if total_tasks > 0 else 0
-        accuracy_rate = correct_tasks / total_tasks if total_tasks > 0 else 0
+                        total_score += eval_result['score']
+                        correct_tasks += eval_result['correct']
         
         return {
             "model": self.model.name,
@@ -215,14 +208,13 @@ class OsintBenchmark:
             "n": total,
             "total_tasks": total_tasks,
             "refusal_rate": refusals / total if total > 0 else 0,
-            "avg_accuracy": avg_accuracy,
-            "accuracy_rate": accuracy_rate,
+            "avg_accuracy": total_score / total_tasks if total_tasks > 0 else 0,
+            "accuracy_rate": correct_tasks / total_tasks if total_tasks > 0 else 0,
             "detailed_results": self.results
         }
     
     def save_results(self, output_path: str):
         results_dict = self._compile_results()
-
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         
         with open(f"{output_path}summary.json", "w") as f:
@@ -232,44 +224,26 @@ class OsintBenchmark:
         for r in self.results:
             if r.refused:
                 records.append({
-                    "case_id": r.case_obj.case_id,
-                    "task_type": "unknown",
-                    "refused": True,
-                    "error_message": r.error_message,
-                    "score": None,
-                    "correct": None
+                    "case_id": r.case_obj.case_id, "task_type": "unknown", "refused": True,
+                    "error_message": r.error_message, "score": None, "correct": None
                 })
             else:
-                # Handle each task in the case
                 for i, task in enumerate(r.case_obj.tasks):
                     if i < len(r.answers):
-                        parsed_answer = r.answers[i]
-                        evaluation = evaluate_answer(parsed_answer, task.answer, task.type)
-                        
+                        evaluation = evaluate_answer(r.answers[i], task.answer, task.type)
                         record = {
-                            "case_id": r.case_obj.case_id,
-                            "task_type": task.type,
-                            "prompt": task.prompt,
-                            "answer": task.answer,
-                            "refused": False,
-                            "error_message": None,
-                            "score": evaluation['score'],
-                            "correct": evaluation['correct']
+                            "case_id": r.case_obj.case_id, "task_type": task.type, "prompt": task.prompt,
+                            "answer": task.answer, "refused": False, "error_message": None,
+                            "score": evaluation['score'], "correct": evaluation['correct']
                         }
-                        records.append(record)
                     else:
-                        # Missing answer for this task
-                        records.append({
-                            "case_id": r.case_obj.case_id,
-                            "task_type": task.type,
-                            "prompt": task.prompt,
-                            "answer": task.answer,
-                            "refused": True,
-                            "error_message": "No answer parsed for this task",
-                            "score": 0.0,
-                            "correct": False
-                        })
-            
+                        record = {
+                            "case_id": r.case_obj.case_id, "task_type": task.type, "prompt": task.prompt,
+                            "answer": task.answer, "refused": True, "error_message": "No answer parsed for this task",
+                            "score": 0.0, "correct": False
+                        }
+                    records.append(record)
+        
         pd.DataFrame(records).to_csv(f"{output_path}detailed.csv", index=False)
 
 if __name__ == "__main__":
