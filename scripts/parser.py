@@ -78,11 +78,7 @@ class TemporalParser(TaskParser):
 class AnalysisParser(TaskParser):
     def parse(self, response: str) -> AnalysisAnswer:
         conclusion_match = re.search(r'conclusion:\s*([^\n]+)', response, re.IGNORECASE)
-        
-        if not conclusion_match:
-            raise ValueError("Missing conclusion in structured format")
-            
-        conclusion = conclusion_match.group(1).strip()
+        conclusion = conclusion_match.group(1).strip() if conclusion_match else response
         
         return AnalysisAnswer(conclusion=conclusion)
 
@@ -100,26 +96,25 @@ def get_parser(task_type: str) -> TaskParser:
     }
     
     if task_type not in parsers:
-        # Default to location for backward compatibility
         return LocationParser()
     
     return parsers[task_type]
 
-def parse_response(response: str, task_type: str = "location") -> Answer:
+def parse_response(response: str, task) -> Answer:
     """Parse structured response based on task type"""
-    parser = get_parser(task_type)
+    parser = get_parser(task.type)
     return parser.parse(response)
 
 # Simple evaluation functions
-def evaluate_answer(parsed_answer: Answer, ground_truth: dict, task_type: str) -> dict:
+def evaluate_answer(parsed_answer: Answer, task, case_id) -> dict:
     """Simple evaluation - returns score and whether it's correct"""
     
-    if task_type in ['location', 'geolocation']:
+    if task.type in ['location', 'geolocation']:
         if isinstance(parsed_answer, LocationAnswer):
             import haversine
             distance_km = haversine.haversine(
                 (parsed_answer.lat, parsed_answer.lng),
-                (ground_truth['lat'], ground_truth['lng'])
+                (task.answer['lat'], task.answer['lng'])
             )
             
             # Simple scoring based on distance
@@ -140,15 +135,15 @@ def evaluate_answer(parsed_answer: Answer, ground_truth: dict, task_type: str) -
                 'distance_km': distance_km
             }
     
-    elif task_type in ['identification', 'person_id', 'object_id']:
+    elif task.type in ['identification', 'person_id', 'object_id']:
         if isinstance(parsed_answer, IdentificationAnswer):
-            type_correct = (ground_truth.get('type', '').lower() in parsed_answer.entity_type.lower() or
-                           parsed_answer.entity_type.lower() in ground_truth.get('type', '').lower())
+            type_correct = (task.answer.get('type', '').lower() in parsed_answer.entity_type.lower() or
+                           parsed_answer.entity_type.lower() in task.answer.get('type', '').lower())
             
             name_correct = True
-            if ground_truth.get('name') and parsed_answer.name:
-                name_correct = (ground_truth['name'].lower() in parsed_answer.name.lower() or
-                               parsed_answer.name.lower() in ground_truth['name'].lower())
+            if task.answer.get('name') and parsed_answer.name:
+                name_correct = (task.answer['name'].lower() in parsed_answer.name.lower() or
+                               parsed_answer.name.lower() in task.answer['name'].lower())
             
             score = 1.0 if (type_correct and name_correct) else 0.0
             return {
@@ -158,12 +153,16 @@ def evaluate_answer(parsed_answer: Answer, ground_truth: dict, task_type: str) -
                 'name_correct': name_correct
             }
     
-    elif task_type in ['analysis']:
-        # TODO: llm judge?
-        pass
-
-    # Default fallback
-    return {'score': 0.5, 'correct': False}
+    elif task.type in ['analysis']:
+        try:
+            from scripts.judge import Judge
+            judge = Judge()
+            return judge.evaluate(str(parsed_answer), task, case_id)
+        except Exception as e:
+            print(f"Judge evaluation failed: {e}")
+            return {'score': 0.0, 'correct': False}
+    
+    return {'score': 0.0, 'correct': False}
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Parse model responses and count valid ones.")

@@ -3,7 +3,7 @@ import requests
 import os
 from abc import ABC, abstractmethod
 from ratelimit import limits, sleep_and_retry
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple
 from osintbench import Case
 
 def get_image_media_type(image_path: str) -> str:
@@ -56,7 +56,7 @@ class BaseMultimodalModel(ABC):
 
     def _build_text_content(self, prompt: str, case: Case) -> List[str]:
         """Build the text content components for a case."""
-        content = [prompt, self._format_case_info(case)]
+        content = ["<system>", prompt, self._format_case_info(case), "</system>"]
         content.extend(self._format_case_tasks(case))
         return content
 
@@ -79,23 +79,26 @@ class BaseMultimodalModel(ABC):
     def _extract_response_text(self, response: requests.Response) -> str: 
         """Extract text from the API response."""
         pass
-
-    def query(self, prompt: str, case: Case, run_folder: str = None) -> str:
+        
+    def query(self, prompt: str, case: Case = None, run_folder: str = None) -> str:
         """
         Public method to query the model.
         """
 
         def api():
-            # Encode images and build text content using base class methods
-            encoded_images = self._encode_case_images(case)
-            text_content = self._build_text_content(prompt, case)
-            print(case.tasks)
-            print(text_content)
+            if case:
+                print("CASE")
+                encoded_images = self._encode_case_images(case)
+                text_content = self._build_text_content(prompt, case)
             
-            # Use client-specific methods for headers, payload, and endpoint
-            headers = self._build_headers()
-            payload = self._build_payload(text_content, encoded_images)
-            endpoint = self._get_endpoint()
+                headers = self._build_headers()
+                payload = self._build_payload(text_content, encoded_images)
+                endpoint = self._get_endpoint()
+            else:
+                print("YO")
+                headers = self._build_headers()
+                payload = self._build_payload(prompt)
+                endpoint = self._get_endpoint()
             
             try:
                 response = requests.post(endpoint, headers=headers, json=payload)
@@ -142,21 +145,21 @@ class AnthropicClient(BaseMultimodalModel):
              headers["anthropic-beta"] = effective_beta_header
         return headers
 
-    def _build_payload(self, text_content: List[str], encoded_images: List[Tuple[str, str]]) -> dict:
-        # Build content list from text content and images
+    def _build_payload(self, text_content: List[str], encoded_images: List[Tuple[str, str]] = None) -> dict:
         content = []
         for text in text_content:
             content.append({"type": "text", "text": text})
         
-        for img_data, media_type in encoded_images:
-            content.append({
-                "type": "image", 
-                "source": {
-                    "type": "base64", 
-                    "media_type": media_type, 
-                    "data": img_data
-                }
-            })
+        if encoded_images:
+            for img_data, media_type in encoded_images:
+                content.append({
+                    "type": "image", 
+                    "source": {
+                        "type": "base64", 
+                        "media_type": media_type, 
+                        "data": img_data
+                    }
+                })
 
         payload = {
             "model": self.model_identifier,
@@ -202,19 +205,20 @@ class GoogleClient(BaseMultimodalModel):
     def _build_headers(self) -> dict:
         return {"Content-Type": "application/json"}
 
-    def _build_payload(self, text_content: List[str], encoded_images: List[Tuple[str, str]]) -> dict:
-        # Build parts list from text content and images
+    def _build_payload(self, text_content: List[str], encoded_images: List[Tuple[str, str]] = None) -> dict:
+        print("BUILDING")
         parts = []
         for text in text_content:
             parts.append({"text": text})
         
-        for img_data, media_type in encoded_images:
-            parts.append({
-                "inline_data": {
-                    "mime_type": media_type, 
-                    "data": img_data
-                }
-            })
+        if encoded_images:
+            for img_data, media_type in encoded_images:
+                parts.append({
+                    "inline_data": {
+                        "mime_type": media_type, 
+                        "data": img_data
+                    }
+                })
 
         payload = {
             "contents": [{"parts": parts}],
@@ -252,21 +256,21 @@ class OpenAIClient(BaseMultimodalModel):
     def _build_headers(self) -> dict:
         return {"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"}
 
-    def _build_payload(self, text_content: List[str], encoded_images: List[Tuple[str, str]]) -> dict:
-        # Build content list from text content and images
+    def _build_payload(self, text_content: List[str], encoded_images: List[Tuple[str, str]] = None) -> dict:
         content = []
         for text in text_content:
             content.append({"type": "input_text", "text": text})
         
-        for img_data, media_type in encoded_images:
-            image_url = f"data:{media_type};base64,{img_data}"
-            image_content = {
-                "type": "input_image",
-                "image_url": image_url
-            }
-            if self.detail:
-                image_content["detail"] = self.detail
-            content.append(image_content)
+        if encoded_images:
+            for img_data, media_type in encoded_images:
+                image_url = f"data:{media_type};base64,{img_data}"
+                image_content = {
+                    "type": "input_image",
+                    "image_url": image_url
+                }
+                if self.detail:
+                    image_content["detail"] = self.detail
+                content.append(image_content)
 
         payload = {
             "model": self.model_identifier,
@@ -322,21 +326,21 @@ class OpenRouterClient(BaseMultimodalModel):
             "HTTP-Referer": self.referer_url
         }
 
-    def _build_payload(self, text_content: List[str], encoded_images: List[Tuple[str, str]]) -> dict:
-        # Build content list from text content and images
+    def _build_payload(self, text_content: List[str], encoded_images: List[Tuple[str, str]] = None) -> dict:
         content = []
         for text in text_content:
             content.append({"type": "text", "text": text})
         
-        for img_data, media_type in encoded_images:
-            image_url = f"data:{media_type};base64,{img_data}"
-            image_content = {
-                "type": "input_image",
-                "image_url": image_url
-            }
-            if self.detail:
-                image_content["detail"] = self.detail
-            content.append(image_content)
+        if encoded_images:
+            for img_data, media_type in encoded_images:
+                image_url = f"data:{media_type};base64,{img_data}"
+                image_content = {
+                    "type": "input_image",
+                    "image_url": image_url
+                }
+                if self.detail:
+                    image_content["detail"] = self.detail
+                content.append(image_content)
         
         return {
             "model": self.model_identifier,
