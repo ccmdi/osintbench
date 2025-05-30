@@ -26,8 +26,8 @@ You must provide a structured answer for each task, BUT you should only provide 
 
 LOCATION_TASK_FORMAT = """
 FOR LOCATION TASKS:
-lat: [latitude as decimal number]
-lng: [longitude as decimal number]
+lat: [latitude as decimal number with as much precision as possible]
+lng: [longitude as decimal number with as much precision as possible]
 """
 
 IDENTIFICATION_TASK_FORMAT = """
@@ -182,10 +182,9 @@ class OsintBenchmark:
                     f.write(response)
                 
                 try:
-
                     for task in case.tasks:
                         answer = parse_response(response, task)
-                        evaluation = evaluate_answer(answer, task, case.case_id)
+                        evaluation = evaluate_answer(answer, task, case.case_id, run_folder)
                         result = BenchmarkResult(case_obj=case, task_id=task.task_id, answer=task.answer, parsed_answer=answer, evaluation=evaluation)
 
                         self.results.append(result)
@@ -193,9 +192,9 @@ class OsintBenchmark:
                         if result.refused:
                             print(f"REFUSED: {result.error_message}")
                         else:
-                            print("BOOM")
-                            #TODO: ACCURACY
-                            pass
+                            print(f"SUCCESS: {result.parsed_answer}")
+                    
+                    return
                 except ValueError as parse_error:
                     print(f"  Format error (attempt {attempt+1}): {str(parse_error)}")
                     if "missing required fields" in str(parse_error) or "parse" in str(parse_error):
@@ -266,7 +265,7 @@ class OsintBenchmark:
                 "task_id": r.task_id,
                 "task_type": task.type,
                 "prompt": task.prompt,
-                "answer": r.answer,
+                "answer": r.parsed_answer,
                 "refused": r.refused,
                 "error_message": r.error_message,
                 "score": r.evaluation.get('score') if r.evaluation else None,

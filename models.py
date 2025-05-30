@@ -87,7 +87,6 @@ class BaseMultimodalModel(ABC):
 
         def api():
             if case:
-                print("CASE")
                 encoded_images = self._encode_case_images(case)
                 text_content = self._build_text_content(prompt, case)
             
@@ -95,7 +94,7 @@ class BaseMultimodalModel(ABC):
                 payload = self._build_payload(text_content, encoded_images)
                 endpoint = self._get_endpoint()
             else:
-                print("YO")
+                #TODO: horrible handling please kill me
                 headers = self._build_headers()
                 payload = self._build_payload(prompt)
                 endpoint = self._get_endpoint()
@@ -206,7 +205,6 @@ class GoogleClient(BaseMultimodalModel):
         return {"Content-Type": "application/json"}
 
     def _build_payload(self, text_content: List[str], encoded_images: List[Tuple[str, str]] = None) -> dict:
-        print("BUILDING")
         parts = []
         for text in text_content:
             parts.append({"text": text})

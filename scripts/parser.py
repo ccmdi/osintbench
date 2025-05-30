@@ -85,7 +85,6 @@ class AnalysisParser(TaskParser):
 def get_parser(task_type: str) -> TaskParser:
     parsers = {
         'location': LocationParser(),
-        'geolocation': LocationParser(),
         'identification': IdentificationParser(),
         'person_id': IdentificationParser(),
         'object_id': IdentificationParser(),
@@ -106,10 +105,8 @@ def parse_response(response: str, task) -> Answer:
     return parser.parse(response)
 
 # Simple evaluation functions
-def evaluate_answer(parsed_answer: Answer, task, case_id) -> dict:
-    """Simple evaluation - returns score and whether it's correct"""
-    
-    if task.type in ['location', 'geolocation']:
+def evaluate_answer(parsed_answer: Answer, task, case_id, run_folder = None) -> dict:   
+    if task.type in ['location']:
         if isinstance(parsed_answer, LocationAnswer):
             import haversine
             distance_km = haversine.haversine(
@@ -117,7 +114,6 @@ def evaluate_answer(parsed_answer: Answer, task, case_id) -> dict:
                 (task.answer['lat'], task.answer['lng'])
             )
             
-            # Simple scoring based on distance
             if distance_km <= 0.1:
                 score = 1.0
             elif distance_km <= 0.5:
@@ -153,11 +149,11 @@ def evaluate_answer(parsed_answer: Answer, task, case_id) -> dict:
                 'name_correct': name_correct
             }
     
-    elif task.type in ['analysis']:
+    elif task.type in ['temporal', 'analysis']:
         try:
             from scripts.judge import Judge
             judge = Judge()
-            return judge.evaluate(str(parsed_answer), task, case_id)
+            return judge.evaluate(str(parsed_answer), task, case_id, run_folder)
         except Exception as e:
             print(f"Judge evaluation failed: {e}")
             return {'score': 0.0, 'correct': False}

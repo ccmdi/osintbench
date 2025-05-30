@@ -11,7 +11,7 @@ class Judge:
         self.api_key = os.getenv(self.model_class.api_key_name)
         self.model = self.model_class(self.api_key)
     
-    def evaluate(self, response: str, task, case_id) -> Dict[str, Any]:
+    def evaluate(self, response: str, task, case_id, run_folder = None) -> Dict[str, Any]:
         """
         Evaluate a response against the task and ground truth using a language model
         
@@ -47,9 +47,10 @@ REASONING: [Brief explanation of why it's correct or incorrect]"""
         try:
             judge_response = self.model.query(judge_prompt)
             
-            os.makedirs("judge", exist_ok=True)
-            with open(f"judge/{case_id}_{task.task_id}.txt", "w") as f:
-                f.write(response)
+            if run_folder:
+                os.makedirs(f"{run_folder}/judge", exist_ok=True)
+                with open(f"{run_folder}/judge/{case_id}_{task.task_id}.txt", "w") as f:
+                    f.write(judge_response)
 
             return self._parse_judge_response(judge_response)
         except Exception as e:
