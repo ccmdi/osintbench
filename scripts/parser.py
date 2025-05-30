@@ -15,18 +15,8 @@ class LocationAnswer(Answer):
     lng: float
 
 @dataclass
-class IdentificationAnswer(Answer):
-    entity_type: str
-    name: str = None
-
-@dataclass
-class TemporalAnswer(Answer):
-    date: str = None
-    time: str = None
-    
-@dataclass
-class AnalysisAnswer(Answer):
-    conclusion: str
+class JudgeAnswer(Answer):
+    response: str
 
 class TaskParser(ABC):
     @abstractmethod
@@ -49,53 +39,17 @@ class LocationParser(TaskParser):
             
         return LocationAnswer(lat=lat, lng=lng)
 
-class IdentificationParser(TaskParser):
-    def parse(self, response: str) -> IdentificationAnswer:
-        type_match = re.search(r'type:\s*([^\n]+)', response, re.IGNORECASE)
-        name_match = re.search(r'name:\s*([^\n]+)', response, re.IGNORECASE)
-        
-        if not type_match:
-            raise ValueError("Missing type in structured format")
-            
-        entity_type = type_match.group(1).strip()
-        name = name_match.group(1).strip() if name_match else None
-        
-        return IdentificationAnswer(entity_type=entity_type, name=name)
-
-class TemporalParser(TaskParser):
-    def parse(self, response: str) -> TemporalAnswer:
-        date_match = re.search(r'date:\s*([^\n]+)', response, re.IGNORECASE)
-        time_match = re.search(r'time:\s*([^\n]+)', response, re.IGNORECASE)
-        
-        date = date_match.group(1).strip() if date_match else None
-        time = time_match.group(1).strip() if time_match else None
-        
-        if not date:
-            raise ValueError("Missing date in structured format")
-            
-        return TemporalAnswer(date=date, time=time)
-
-class AnalysisParser(TaskParser):
-    def parse(self, response: str) -> AnalysisAnswer:
-        conclusion_match = re.search(r'conclusion:\s*([^\n]+)', response, re.IGNORECASE)
-        conclusion = conclusion_match.group(1).strip() if conclusion_match else response
-        
-        return AnalysisAnswer(conclusion=conclusion)
+class JudgeParser(TaskParser):
+    def parse(self, response: str) -> JudgeAnswer:
+        return JudgeAnswer(response=response)
 
 def get_parser(task_type: str) -> TaskParser:
     parsers = {
         'location': LocationParser(),
-        'identification': IdentificationParser(),
-        'person_id': IdentificationParser(),
-        'object_id': IdentificationParser(),
-        'temporal': TemporalParser(),
-        'date': TemporalParser(),
-        'time': TemporalParser(),
-        'analysis': AnalysisParser(),
     }
     
     if task_type not in parsers:
-        return LocationParser()
+        return JudgeParser()
     
     return parsers[task_type]
 
@@ -104,7 +58,6 @@ def parse_response(response: str, task) -> Answer:
     parser = get_parser(task.type)
     return parser.parse(response)
 
-# Simple evaluation functions
 def evaluate_answer(parsed_answer: Answer, task, case_id, run_folder = None) -> dict:   
     if task.type in ['location']:
         if isinstance(parsed_answer, LocationAnswer):
@@ -130,30 +83,12 @@ def evaluate_answer(parsed_answer: Answer, task, case_id, run_folder = None) -> 
                 'correct': score >= 0.8,
                 'distance_km': distance_km
             }
-    
-    elif task.type in ['identification', 'person_id', 'object_id']:
-        if isinstance(parsed_answer, IdentificationAnswer):
-            type_correct = (task.answer.get('type', '').lower() in parsed_answer.entity_type.lower() or
-                           parsed_answer.entity_type.lower() in task.answer.get('type', '').lower())
-            
-            name_correct = True
-            if task.answer.get('name') and parsed_answer.name:
-                name_correct = (task.answer['name'].lower() in parsed_answer.name.lower() or
-                               parsed_answer.name.lower() in task.answer['name'].lower())
-            
-            score = 1.0 if (type_correct and name_correct) else 0.0
-            return {
-                'score': score,
-                'correct': score == 1.0,
-                'type_correct': type_correct,
-                'name_correct': name_correct
-            }
-    
-    elif task.type in ['temporal', 'analysis']:
+    else:
         try:
+            print("JUDGEMENT")
             from scripts.judge import Judge
             judge = Judge()
-            return judge.evaluate(str(parsed_answer), task, case_id, run_folder)
+            return judge.evaluate(parsed_answer.response, task, case_id, run_folder)
         except Exception as e:
             print(f"Judge evaluation failed: {e}")
             return {'score': 0.0, 'correct': False}

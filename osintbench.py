@@ -44,7 +44,7 @@ time: [HH:MM or time period if applicable]
 
 ANALYSIS_TASK_FORMAT = """
 FOR ANALYSIS TASKS:
-conclusion: [conclusion to a question - must be ONE answer, no hedging]
+conclusion: [conclusion to a question - must be ONE answer, no hedging (you cannot say 'or')]
 """
 
 from models import *
@@ -238,15 +238,29 @@ class OsintBenchmark:
                         if not r.refused and r.evaluation)
         
         valid_tasks = sum(1 for r in self.results if not r.refused and r.evaluation)
+
+        location_tasks = sum(1 for r in self.results if not r.refused and r.evaluation and r.evaluation.get('type') == 'location')
+        identification_tasks = sum(1 for r in self.results if not r.refused and r.evaluation and r.evaluation.get('type') == 'identification')
+        temporal_tasks = sum(1 for r in self.results if not r.refused and r.evaluation and r.evaluation.get('type') == 'temporal')
+        analysis_tasks = sum(1 for r in self.results if not r.refused and r.evaluation and r.evaluation.get('type') == 'analysis')
+
+        location_score = sum(r.evaluation.get('score', 0) for r in self.results if not r.refused and r.evaluation and r.evaluation.get('type') == 'location')
+        identification_score = sum(r.evaluation.get('score', 0) for r in self.results if not r.refused and r.evaluation and r.evaluation.get('type') == 'identification')
+        temporal_score = sum(r.evaluation.get('score', 0) for r in self.results if not r.refused and r.evaluation and r.evaluation.get('type') == 'temporal')
+        analysis_score = sum(r.evaluation.get('score', 0) for r in self.results if not r.refused and r.evaluation and r.evaluation.get('type') == 'analysis')
         
         return {
             "model": self.model.name,
             "test": os.path.basename(self.dataset_path),
-            "n": len(set(r.case_obj.case_id for r in self.results)),  # Number of unique cases
+            "n": len(set(r.case_obj.case_id for r in self.results)),
             "total_tasks": total_tasks,
             "refusal_rate": refusals / total if total > 0 else 0,
-            "avg_accuracy": total_score / valid_tasks if valid_tasks > 0 else 0,
-            "accuracy_rate": correct_tasks / valid_tasks if valid_tasks > 0 else 0,
+            "location_accuracy": location_score / location_tasks if location_tasks > 0 else 0,
+            "identification_accuracy": identification_score / identification_tasks if identification_tasks > 0 else 0,
+            "temporal_accuracy": temporal_score / temporal_tasks if temporal_tasks > 0 else 0,
+            "analysis_accuracy": analysis_score / analysis_tasks if analysis_tasks > 0 else 0,
+            "overall_accuracy": total_score / valid_tasks if valid_tasks > 0 else 0,
+            "task_accuracy": correct_tasks / valid_tasks if valid_tasks > 0 else 0,
             "detailed_results": self.results
         }
     
@@ -305,5 +319,9 @@ if __name__ == "__main__":
     print(f"Total samples: {results['n']}")
     print(f"Total tasks: {results['total_tasks']}")
     print(f"Refusal rate: {results['refusal_rate']:.2%}")
-    print(f"Average accuracy: {results['avg_accuracy']:.3f}")
-    print(f"Accuracy rate: {results['accuracy_rate']:.2%}")
+    print(f"Location accuracy: {results['location_accuracy']:.3f}")
+    print(f"Identification accuracy: {results['identification_accuracy']:.3f}")
+    print(f"Temporal accuracy: {results['temporal_accuracy']:.3f}")
+    print(f"Analysis accuracy: {results['analysis_accuracy']:.3f}")
+    print(f"Overall accuracy: {results['overall_accuracy']:.3f}")
+    print(f"Task accuracy: {results['task_accuracy']:.3f}")

@@ -40,6 +40,8 @@ Instructions:
 4. For temporal tasks: Check if dates/times match reasonably
 5. For analysis tasks: Check if the conclusion is reasonable and matches
 
+If the response contains hedging (e.g. the word 'or' in an analysis response, or the word 'about' in a temporal response, etc.), you should return NO.
+
 Respond with EXACTLY this format:
 CORRECT: [YES/NO]
 REASONING: [Brief explanation of why it's correct or incorrect]"""
