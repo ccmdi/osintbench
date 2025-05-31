@@ -46,34 +46,21 @@ class BaseMultimodalModel(ABC):
         """Encode all images from a case."""
         return [self._encode_image(image_path) for image_path in case.images]
 
-    def _format_case_info(self, case: Case) -> str:
-        """Format case information as a text string."""
-        return f"<info>{case.info}</info>"
-
-    def _format_case_tasks(self, case: Case) -> List[str]:
-        """Format case tasks as a list of text strings."""
-        return [f"<task>{task.type}: {task.prompt}</task>" for task in case.tasks]
-
-    def _build_text_content(self, prompt: str, case: Case) -> List[str]:
-        """Build the text content components for a case."""
-        content = ["<system>", prompt, self._format_case_info(case), "</system>"]
-        content.extend(self._format_case_tasks(case))
-        return content
-
-    @abstractmethod
     def _build_headers(self) -> dict: 
         """Build request headers specific to the client."""
-        pass
+        return {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}"
+        }
 
     @abstractmethod
     def _build_payload(self, text_content: List[str], encoded_images: List[Tuple[str, str]]) -> dict: 
         """Build the API payload using text content and encoded images."""
         pass
 
-    @abstractmethod
     def _get_endpoint(self) -> str: 
         """Get the API endpoint URL."""
-        pass
+        return self.base_url
 
     @abstractmethod
     def _extract_response_text(self, response: requests.Response) -> str: 
@@ -88,16 +75,12 @@ class BaseMultimodalModel(ABC):
         def api():
             if case:
                 encoded_images = self._encode_case_images(case)
-                text_content = self._build_text_content(prompt, case)
-            
-                headers = self._build_headers()
-                payload = self._build_payload(text_content, encoded_images)
-                endpoint = self._get_endpoint()
             else:
-                #TODO: horrible handling please kill me
-                headers = self._build_headers()
-                payload = self._build_payload(prompt)
-                endpoint = self._get_endpoint()
+                encoded_images = []
+            
+            headers = self._build_headers()
+            payload = self._build_payload(prompt, encoded_images)
+            endpoint = self._get_endpoint()
             
             try:
                 response = requests.post(endpoint, headers=headers, json=payload)
@@ -122,16 +105,12 @@ class BaseMultimodalModel(ABC):
 
         return call()
 
-
 class AnthropicClient(BaseMultimodalModel):
     api_key_name = "ANTHROPIC_API_KEY"
     base_url = "https://api.anthropic.com/v1/messages"
     anthropic_version: str = "2023-06-01"
     beta_header: str = None
     enable_thinking: bool = False
-
-    def _get_endpoint(self) -> str:
-        return self.base_url
 
     def _build_headers(self) -> dict:
         headers = {
@@ -146,9 +125,11 @@ class AnthropicClient(BaseMultimodalModel):
 
     def _build_payload(self, text_content: List[str], encoded_images: List[Tuple[str, str]] = None) -> dict:
         content = []
+        # Text
         for text in text_content:
             content.append({"type": "text", "text": text})
         
+        # Images
         if encoded_images:
             for img_data, media_type in encoded_images:
                 content.append({
@@ -248,12 +229,6 @@ class OpenAIClient(BaseMultimodalModel):
     detail: str = None
     tools: List = None
 
-    def _get_endpoint(self) -> str:
-        return self.base_url
-
-    def _build_headers(self) -> dict:
-        return {"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"}
-
     def _build_payload(self, text_content: List[str], encoded_images: List[Tuple[str, str]] = None) -> dict:
         content = []
         for text in text_content:
@@ -278,8 +253,8 @@ class OpenAIClient(BaseMultimodalModel):
         if hasattr(self, 'temperature') and self.temperature >= 0:
              payload["temperature"] = self.temperature
 
-        if hasattr(self, 'max_output_tokens') and self.max_output_tokens > 0:
-             payload["max_output_tokens"] = self.max_output_tokens
+        if hasattr(self, 'max_tokens') and self.max_tokens > 0:
+             payload["max_tokens"] = self.max_tokens
 
         if self.reasoning_effort:
              payload["reasoning"] = {"effort": self.reasoning_effort}
@@ -313,9 +288,6 @@ class OpenRouterClient(BaseMultimodalModel):
     api_key_name = "OPENROUTER_API_KEY"
     base_url = "https://openrouter.ai/api/v1/chat/completions"
     referer_url: str = "https://geobench.org"
-
-    def _get_endpoint(self) -> str:
-        return self.base_url
 
     def _build_headers(self) -> dict:
         return {

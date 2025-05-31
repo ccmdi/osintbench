@@ -1,8 +1,8 @@
 import os
-import sys
 from typing import Dict, Any
 
 from models import Gemini2Flash
+from prompt import system_prompt
 
 class Judge:
     def __init__(self):
@@ -40,14 +40,14 @@ Instructions:
 4. For temporal tasks: Check if dates/times match reasonably
 5. For analysis tasks: Check if the conclusion is reasonable and matches
 
-If the response contains hedging (e.g. the word 'or' in an analysis response, or the word 'about' in a temporal response, etc.), you should return NO.
+If the response contains hedging (i.e. the model cannot decide between multiple answers), you should return NO.
 
 Respond with EXACTLY this format:
-CORRECT: [YES/NO]
-REASONING: [Brief explanation of why it's correct or incorrect]"""
+CORRECT: YES/NO
+REASONING: Brief explanation of why it's correct or incorrect"""
 
         try:
-            judge_response = self.model.query(judge_prompt)
+            judge_response = self.model.query(system_prompt(judge_prompt))
             
             if run_folder:
                 os.makedirs(f"{run_folder}/judge", exist_ok=True)
@@ -75,5 +75,6 @@ REASONING: [Brief explanation of why it's correct or incorrect]"""
         
         print(correct, reasoning)
         
-        return {"correct": correct, "reasoning": reasoning}
+        #TODO: MAYBE dynamic scoring but also maybe not
+        return {"correct": correct, "score": 1 if correct else 0, "reasoning": reasoning}
     

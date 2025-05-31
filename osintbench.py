@@ -9,45 +9,9 @@ from dotenv import load_dotenv
 
 from scripts.parser import parse_response, Answer, evaluate_answer
 
-SYSTEM_PROMPT_BASE = """
-You are participating in an OSINT challenge. You are given task(s) that you must provide answers to using the provided evidence and any tools you have available.
-For instance, you have access to Google Search, which may be required to answer the question. Take your time to reason through the evidence.
-
-"""
-
-SYSTEM_PROMPT_PRESTRUCTURE = """
-Your final answer MUST be in structured format:
-
-"""
-
-SYSTEM_PROMPT_POSTSTRUCTURE = """
-You must provide a structured answer for each task, BUT you should only provide a structured format for the task types you are given. For instance, do not provide a temporal task answer if there is not a temporal task.
-"""
-
-LOCATION_TASK_FORMAT = """
-FOR LOCATION TASKS:
-lat: [latitude as decimal number with as much precision as possible]
-lng: [longitude as decimal number with as much precision as possible]
-"""
-
-IDENTIFICATION_TASK_FORMAT = """
-FOR IDENTIFICATION TASKS:
-type: [entity type - person/organization/vehicle/etc]
-name: [specific name if identifiable]
-"""
-
-TEMPORAL_TASK_FORMAT = """
-FOR TEMPORAL TASKS:
-date: [YYYY-MM-DD or descriptive period]
-time: [HH:MM or time period if applicable]
-"""
-
-ANALYSIS_TASK_FORMAT = """
-FOR ANALYSIS TASKS:
-conclusion: [conclusion to a question - must be ONE answer, no hedging (you cannot say 'or')]
-"""
-
 from models import *
+from prompt import get_prompt
+
 load_dotenv()
 
 @dataclass
@@ -98,7 +62,7 @@ class BenchmarkResult:
 class OsintBenchmark:
     def __init__(self, 
                  dataset_path: str,
-                 model: str = "Claude4SonnetThinking",
+                 model: str,
                  api_key: Optional[str] = None,
                  max_retries: int = 3):
         self.dataset_path = dataset_path
@@ -107,6 +71,9 @@ class OsintBenchmark:
         self.max_retries = max_retries
         
         try:
+            if not model:
+                raise ValueError("No model provided.")
+            
             model_class = globals()[model]
             
             if not issubclass(model_class, BaseMultimodalModel):
@@ -119,7 +86,6 @@ class OsintBenchmark:
                 raise ValueError(f"API key {model_class.api_key_name} not found for {model}")
                 
             self.model = model_class(api_key)
-            
         except KeyError:
             raise ValueError(f"Unknown model provider: {model}. Make sure the class is defined.")
         
@@ -132,23 +98,6 @@ class OsintBenchmark:
         for case in data['cases']:
             cases.append(Case.from_dict(case, self.dataset_path))
         return cases
-
-    def prompt(self, case: Case) -> str:
-        """Builds prompt for a case."""
-        prompt = SYSTEM_PROMPT_BASE + SYSTEM_PROMPT_PRESTRUCTURE
-        for task in case.tasks:
-            match task.type:
-                case "location":
-                    prompt += LOCATION_TASK_FORMAT
-                case "identification":
-                    prompt += IDENTIFICATION_TASK_FORMAT
-                case "temporal":
-                    prompt += TEMPORAL_TASK_FORMAT
-                case "analysis":
-                    prompt += ANALYSIS_TASK_FORMAT
-        
-        prompt += SYSTEM_PROMPT_POSTSTRUCTURE
-        return prompt
 
     def run(self, args) -> Dict:
         """Runs the benchmark. Returns `_compile_results` output."""
@@ -175,7 +124,7 @@ class OsintBenchmark:
     def _evaluate_case(self, case: Case) -> None: #TODO: do we want to return anything?
         for attempt in range(self.max_retries):
             try:
-                response = self.model.query(self.prompt(case), case, run_folder)
+                response = self.model.query(get_prompt(case), case, run_folder)
                 
                 os.makedirs(f"{run_folder}/output/", exist_ok=True)
                 with open(f"{run_folder}/output/{case.case_id}.txt", "w", encoding="utf-8") as f:
@@ -279,7 +228,6 @@ class OsintBenchmark:
                 "task_id": r.task_id,
                 "task_type": task.type,
                 "prompt": task.prompt,
-                "answer": r.parsed_answer,
                 "refused": r.refused,
                 "error_message": r.error_message,
                 "score": r.evaluation.get('score') if r.evaluation else None,
@@ -295,8 +243,7 @@ if __name__ == "__main__":
     parser.add_argument("--samples", "-n", type=int, default=None,
                         help="Number of samples to test (default: all)")
     parser.add_argument("--sample-id", "-i", type=int, default=None, help="Run a specific sample by ID")
-    parser.add_argument("--model", "-m", type=str, default="Claude3_7Sonnet",
-                        help="Model to use (default: 'Claude3_7Sonnet')")
+    parser.add_argument("--model", "-m", type=str, help="Model to use")
     parser.add_argument("--max-retries", type=int, default=3,
                         help="Maximum number of retries for API/network errors (default: 3)")
     args = parser.parse_args()
