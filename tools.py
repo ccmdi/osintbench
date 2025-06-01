@@ -101,7 +101,8 @@ def reverse_image_search(image_path: str, use_cache: bool = True) -> list:
     
     if use_cache:
         cached_results = load_cache(cache_path)
-        return cached_results
+        if cached_results:
+            return cached_results
     
     try:
         # Get absolute path for the image
@@ -273,7 +274,7 @@ def reverse_image_search(image_path: str, use_cache: bool = True) -> list:
     except Exception as e:
         print(f"Error performing reverse image search: {str(e)}")
         return []
-
+    
 #TODO
 # TOOLS = {
 #     []

@@ -50,6 +50,7 @@ def format_case_info(case) -> str:
         for img in case.images:
             img_name = os.path.basename(img)
             exif = get_exif_data(img)
+            # print("reversing the image search")
             # reverse_img_search_results = reverse_image_search(img)
             if exif:
                 case_info += f"Here is the EXIF data for image {img_name}: <exif>\n{exif}\n</exif>\n"
