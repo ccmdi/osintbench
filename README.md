@@ -25,5 +25,6 @@ Models go by their class name in `models.py`. Claude 3.5 Haiku goes by `Claude3_
 - [ ] **Better tool use**: EXIF extraction, reverse image search, etc.
     * For right now, EXIF is passed as part of the prompt.
 - [ ] **High quality, human-verified datasets**
+- [ ] Video support
 - [ ] Recursive prompting/self-evaluation
-- [ ] Release  
+- [ ] Release

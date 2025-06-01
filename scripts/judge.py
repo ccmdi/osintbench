@@ -26,25 +26,25 @@ class Judge:
                 
         judge_prompt = f"""You are an expert evaluator. Your job is to determine if a response correctly answers the given task.
 
-Task Type: {task.type}
-Task: {task.prompt}
+        Task Type: {task.type}
+        Task: {task.prompt}
 
-Correct Answer: {task.answer}
+        Correct Answer: {task.answer}
 
-Response to Evaluate: {response}
+        Response to Evaluate: {response}
 
-Instructions:
-1. Carefully compare the response against the correct answer
-2. For location tasks: Check if coordinates are very close (within ~1km is acceptable)
-3. For identification tasks: Check if the type and name match (partial matches acceptable)
-4. For temporal tasks: Check if dates/times match reasonably
-5. For analysis tasks: Check if the conclusion is reasonable and matches
+        Instructions:
+        1. Carefully compare the response against the correct answer
+        2. For location tasks: Check if coordinates are very close (within ~1km is acceptable)
+        3. For identification tasks: Check if the type and name match (partial matches acceptable)
+        4. For temporal tasks: Check if dates/times match reasonably
+        5. For analysis tasks: Check if the conclusion is reasonable and matches
 
-If the response contains hedging (i.e. the model cannot decide between multiple answers), you should return NO.
+        If the response contains hedging (i.e. the model cannot decide between multiple answers), you should return NO.
 
-Respond with EXACTLY this format:
-CORRECT: YES/NO
-REASONING: Brief explanation of why it's correct or incorrect"""
+        Respond with EXACTLY this format:
+        CORRECT: YES/NO
+        REASONING: Brief explanation of why it's correct or incorrect"""
 
         try:
             judge_response = self.model.query(system_prompt(judge_prompt))
@@ -75,6 +75,5 @@ REASONING: Brief explanation of why it's correct or incorrect"""
         
         print(correct, reasoning)
         
-        #TODO: MAYBE dynamic scoring but also maybe not
         return {"correct": correct, "score": 1 if correct else 0, "reasoning": reasoning}
     

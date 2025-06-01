@@ -23,7 +23,7 @@ class BaseMultimodalModel(ABC):
     name: str = None
     rate_limit: int = 5
     rate_limit_period: int = 60
-    max_tokens: int = 32000
+    max_tokens: int = 128000
     temperature: float = 0.4
 
     def __init__(self, api_key: str):
@@ -149,7 +149,7 @@ class AnthropicClient(BaseMultimodalModel):
         }
         
         if self.enable_thinking:
-            payload["thinking"] = {"type": "enabled", "budget_tokens": self.max_tokens - 512}
+            payload["thinking"] = {"type": "enabled", "budget_tokens": self.max_tokens - 32000}
             if "temperature" in payload:
                 del payload["temperature"]
         return payload

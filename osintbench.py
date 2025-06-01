@@ -53,6 +53,7 @@ class Case:
 class BenchmarkResult:
     case_obj: Case
     task_id: int
+    task_type: str
     answer: Answer = None
     parsed_answer: Answer = None
     evaluation: float = None
@@ -134,7 +135,7 @@ class OsintBenchmark:
                     for task in case.tasks:
                         answer = parse_response(response, task)
                         evaluation = evaluate_answer(answer, task, case.case_id, run_folder)
-                        result = BenchmarkResult(case_obj=case, task_id=task.task_id, answer=task.answer, parsed_answer=answer, evaluation=evaluation)
+                        result = BenchmarkResult(case_obj=case, task_id=task.task_id, task_type=task.type, answer=task.answer, parsed_answer=answer, evaluation=evaluation)
 
                         self.results.append(result)
                         
@@ -149,6 +150,8 @@ class OsintBenchmark:
                     if "missing required fields" in str(parse_error) or "parse" in str(parse_error):
                         return BenchmarkResult(
                             case_obj=case, 
+                            task_id=task.task_id,
+                            task_type=task.type,
                             answer=task.answer,
                             parsed_answer=None,
                             evaluation=None,
@@ -165,6 +168,8 @@ class OsintBenchmark:
                 
                 return BenchmarkResult(
                     case_obj=case, 
+                    task_id=None,
+                    task_type=None,
                     answer=None, 
                     parsed_answer=None,
                     evaluation=None,
@@ -176,10 +181,8 @@ class OsintBenchmark:
         total = len(self.results)
         refusals = sum(1 for r in self.results if r.refused)
         
-        # Now results are already task-level, so total_tasks = total results
         total_tasks = total
         
-        # Count correct and sum scores from non-refused results with evaluations
         correct_tasks = sum(1 for r in self.results 
                         if not r.refused and r.evaluation and r.evaluation.get('correct', False))
         
@@ -188,15 +191,16 @@ class OsintBenchmark:
         
         valid_tasks = sum(1 for r in self.results if not r.refused and r.evaluation)
 
-        location_tasks = sum(1 for r in self.results if not r.refused and r.evaluation and r.evaluation.get('type') == 'location')
-        identification_tasks = sum(1 for r in self.results if not r.refused and r.evaluation and r.evaluation.get('type') == 'identification')
-        temporal_tasks = sum(1 for r in self.results if not r.refused and r.evaluation and r.evaluation.get('type') == 'temporal')
-        analysis_tasks = sum(1 for r in self.results if not r.refused and r.evaluation and r.evaluation.get('type') == 'analysis')
+        # Use r.task_type instead of r.evaluation.get('type')
+        location_tasks = sum(1 for r in self.results if not r.refused and r.evaluation and r.task_type == 'location')
+        identification_tasks = sum(1 for r in self.results if not r.refused and r.evaluation and r.task_type == 'identification')
+        temporal_tasks = sum(1 for r in self.results if not r.refused and r.evaluation and r.task_type == 'temporal')
+        analysis_tasks = sum(1 for r in self.results if not r.refused and r.evaluation and r.task_type == 'analysis')
 
-        location_score = sum(r.evaluation.get('score', 0) for r in self.results if not r.refused and r.evaluation and r.evaluation.get('type') == 'location')
-        identification_score = sum(r.evaluation.get('score', 0) for r in self.results if not r.refused and r.evaluation and r.evaluation.get('type') == 'identification')
-        temporal_score = sum(r.evaluation.get('score', 0) for r in self.results if not r.refused and r.evaluation and r.evaluation.get('type') == 'temporal')
-        analysis_score = sum(r.evaluation.get('score', 0) for r in self.results if not r.refused and r.evaluation and r.evaluation.get('type') == 'analysis')
+        location_score = sum(r.evaluation.get('score', 0) for r in self.results if not r.refused and r.evaluation and r.task_type == 'location')
+        identification_score = sum(r.evaluation.get('score', 0) for r in self.results if not r.refused and r.evaluation and r.task_type == 'identification')
+        temporal_score = sum(r.evaluation.get('score', 0) for r in self.results if not r.refused and r.evaluation and r.task_type == 'temporal')
+        analysis_score = sum(r.evaluation.get('score', 0) for r in self.results if not r.refused and r.evaluation and r.task_type == 'analysis')
         
         return {
             "model": self.model.name,
