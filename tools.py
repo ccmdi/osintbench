@@ -5,8 +5,12 @@ def get_exif_data(image_path: str) -> dict:
         exif_dict = piexif.load(image_path, True)
         return exif_dict
     except Exception as e:
-        print(f"Error extracting EXIF data: {str(e)}")
-        return None
+        if "No EXIF data found" in str(e) or "Given file is neither JPEG nor TIFF" in str(e):
+            print(f"No EXIF data found for {image_path}")
+            return None
+        else:
+            print(f"Error extracting EXIF data: {str(e)}")
+            return None
 
 
 def visit_webpage(url: str) -> str:

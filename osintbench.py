@@ -7,7 +7,7 @@ import datetime
 import argparse
 from dotenv import load_dotenv
 
-from scripts.parser import parse_response, Answer, evaluate_answer
+from scripts.eval import parse_response, evaluate_answer
 
 from models import *
 from prompt import get_prompt
@@ -54,8 +54,8 @@ class BenchmarkResult:
     case_obj: Case
     task_id: int
     task_type: str
-    answer: Answer = None
-    parsed_answer: Answer = None
+    answer: Any = None
+    parsed_answer: Any = None
     evaluation: float = None
     refused: bool = False
     error_message: Optional[str] = None
@@ -122,7 +122,8 @@ class OsintBenchmark:
         
         return self._compile_results()
     
-    def _evaluate_case(self, case: Case) -> None: #TODO: do we want to return anything?
+    def _evaluate_case(self, case: Case) -> None:
+        """Evaluates a case."""
         for attempt in range(self.max_retries):
             try:
                 response = self.model.query(get_prompt(case), case, run_folder)
@@ -133,9 +134,16 @@ class OsintBenchmark:
                 
                 try:
                     for task in case.tasks:
-                        answer = parse_response(response, task)
+                        answer = parse_response(response, task, case.case_id, run_folder)
                         evaluation = evaluate_answer(answer, task, case.case_id, run_folder)
-                        result = BenchmarkResult(case_obj=case, task_id=task.task_id, task_type=task.type, answer=task.answer, parsed_answer=answer, evaluation=evaluation)
+                        result = BenchmarkResult(
+                            case_obj=case, 
+                            task_id=task.task_id, 
+                            task_type=task.type, 
+                            answer=task.answer, 
+                            parsed_answer=answer, 
+                            evaluation=evaluation
+                        )
 
                         self.results.append(result)
                         
@@ -144,20 +152,25 @@ class OsintBenchmark:
                         else:
                             print(f"SUCCESS: {result.parsed_answer}")
                     
-                    return
+                    return  # Success - all tasks processed
+                    
                 except ValueError as parse_error:
                     print(f"  Format error (attempt {attempt+1}): {str(parse_error)}")
                     if "missing required fields" in str(parse_error) or "parse" in str(parse_error):
-                        return BenchmarkResult(
-                            case_obj=case, 
-                            task_id=task.task_id,
-                            task_type=task.type,
-                            answer=task.answer,
-                            parsed_answer=None,
-                            evaluation=None,
-                            refused=True,
-                            error_message=f"Format error: {str(parse_error)}"
-                        )
+                        # Add error result for each task in the case
+                        for task in case.tasks:
+                            error_result = BenchmarkResult(
+                                case_obj=case, 
+                                task_id=task.task_id,
+                                task_type=task.type,
+                                answer=task.answer,
+                                parsed_answer=None,
+                                evaluation=None,
+                                refused=True,
+                                error_message=f"Format error: {str(parse_error)}"
+                            )
+                            self.results.append(error_result)
+                        return  # Don't retry for format errors
                 
             except Exception as e:
                 error_msg = str(e)
@@ -166,16 +179,20 @@ class OsintBenchmark:
                     print(f"  Retrying...")
                     continue
                 
-                return BenchmarkResult(
-                    case_obj=case, 
-                    task_id=None,
-                    task_type=None,
-                    answer=None, 
-                    parsed_answer=None,
-                    evaluation=None,
-                    refused=True,
-                    error_message=error_msg
-                )
+                # Final attempt failed - add error result for each task
+                for task in case.tasks:
+                    error_result = BenchmarkResult(
+                        case_obj=case, 
+                        task_id=task.task_id,
+                        task_type=task.type,
+                        answer=task.answer, 
+                        parsed_answer=None,
+                        evaluation=None,
+                        refused=True,
+                        error_message=error_msg
+                    )
+                    self.results.append(error_result)
+                return
     
     def _compile_results(self) -> Dict:
         total = len(self.results)

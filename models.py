@@ -4,7 +4,6 @@ import os
 from abc import ABC, abstractmethod
 from ratelimit import limits, sleep_and_retry
 from typing import List, Tuple
-from osintbench import Case
 
 def get_image_media_type(image_path: str) -> str:
     """Determine the media type based on file extension."""
@@ -23,7 +22,7 @@ class BaseMultimodalModel(ABC):
     name: str = None
     rate_limit: int = 5
     rate_limit_period: int = 60
-    max_tokens: int = 128000
+    max_tokens: int = 64000
     temperature: float = 0.4
 
     def __init__(self, api_key: str):
@@ -42,7 +41,7 @@ class BaseMultimodalModel(ABC):
             img_data = base64.b64encode(img_file.read()).decode("utf-8")
         return img_data, media_type
 
-    def _encode_case_images(self, case: Case) -> List[Tuple[str, str]]:
+    def _encode_case_images(self, case) -> List[Tuple[str, str]]:
         """Encode all images from a case."""
         return [self._encode_image(image_path) for image_path in case.images]
 
@@ -67,7 +66,7 @@ class BaseMultimodalModel(ABC):
         """Extract text from the API response."""
         pass
         
-    def query(self, prompt: str, case: Case = None, run_folder: str = None) -> str:
+    def query(self, prompt: str, case = None, run_folder: str = None) -> str:
         """
         Public method to query the model.
         """
