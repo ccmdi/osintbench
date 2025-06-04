@@ -10,7 +10,7 @@ import math
 def load_metadata(dataset_folder_path):
     metadata_path = os.path.join(dataset_folder_path, "metadata.json")
     if os.path.exists(metadata_path):
-        with open(metadata_path, "r") as f:
+        with open(metadata_path, "r", encoding="utf-8") as f:
             return json.load(f)
     return None
 
@@ -172,14 +172,6 @@ st.markdown("""
     section[data-testid="stSidebar"] > div {
         width: 400px !important;
     }
-    
-    /* Disable map interaction */
-    .stDeckGlJsonChart {
-        pointer-events: none !important;
-    }
-    .deck-tooltip {
-        pointer-events: none !important;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -188,7 +180,7 @@ st.title("Dataset viewer")
 # Sidebar for dataset selection and case navigation
 st.sidebar.header("Navigation")
 dataset_base_path = "dataset"
-available_datasets = [d for d in os.listdir(dataset_base_path) if os.path.isdir(os.path.join(dataset_base_path, d))]
+available_datasets = [d for d in os.listdir(dataset_base_path) if os.path.isdir(os.path.join(dataset_base_path, d)) and not d.startswith('.')]
 
 selected_dataset_name = st.sidebar.selectbox("Select Dataset", available_datasets)
 
