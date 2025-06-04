@@ -1,9 +1,12 @@
 SYSTEM_PROMPT_BASE = """
 You are participating in an OSINT challenge. You are given task(s) that you must provide answers to using the provided evidence and any tools you have available.
-For instance, you have access to Google Search, which is OFTEN required to give answers to tasks. You may need to look at multiple sources, like news articles, social media pages, online images, etc.
+For instance, you have access to Search, which is OFTEN required to give answers to tasks. You may need to look at multiple sources, like news articles, social media pages, online images, etc.
 You should explore the evidence in detail. For instance, if you have positive reverse image search results, you might consider visiting the webpages that contain the images for more information.
+EXIF data can also contain useful information about images, which is provided to you if available.
 
 Take your time to reason through evidence and clues; you should provide the reasoning for your answer.
+
+Even if you are unsure, you SHOULD still provide an answer. Giving a wrong answer is much better than giving no answer.
 """
 
 SYSTEM_PROMPT_PRESTRUCTURE = """
@@ -11,15 +14,20 @@ Your final answer after your reasoning MUST be in structured format:
 """
 
 SYSTEM_PROMPT_POSTSTRUCTURE = """
-You must provide a structured answer for each task, BUT you should only provide a structured format for the task types you are given. For instance, do not provide a temporal task answer if there is not a temporal task.
+You must provide a structured answer for each task.
 """
 
 LOCATION_TASK_FORMAT = """
-FOR LOCATION TASKS:
+FOR LOCATION TASKS (exact location):
 lat: [latitude as decimal number with as much precision as possible]
 lng: [longitude as decimal number with as much precision as possible]
 
 Within 100 meters is a perfect answer — you should focus your efforts on getting as absolutely close as possible if you know where it is.
+"""
+
+LOCATION_TASK_BETA = """
+FOR LOCATION TASKS (island, city, region, etc.):
+name: [name of the location]
 """
 
 IDENTIFICATION_TASK_FORMAT = """

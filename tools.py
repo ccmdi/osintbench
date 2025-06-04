@@ -3,6 +3,10 @@ def get_exif_data(image_path: str) -> dict:
 
     try:
         exif_dict = piexif.load(image_path, True)
+        
+        if 'thumbnail' in exif_dict:
+            del exif_dict['thumbnail']
+
         return exif_dict
     except Exception as e:
         if "No EXIF data found" in str(e) or "Given file is neither JPEG nor TIFF" in str(e):

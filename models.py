@@ -4,6 +4,8 @@ import os
 from abc import ABC, abstractmethod
 from ratelimit import limits, sleep_and_retry
 from typing import List, Tuple
+from PIL import Image
+import io
 
 def get_image_media_type(image_path: str) -> str:
     """Determine the media type based on file extension."""
@@ -12,6 +14,8 @@ def get_image_media_type(image_path: str) -> str:
         return "image/png"
     elif ext in ['.jpg', '.jpeg']:
         return "image/jpeg"
+    elif ext == '.webp':
+        return "image/webp"
     else:
         return "image/jpeg" # Default fallback
 
@@ -110,6 +114,54 @@ class AnthropicClient(BaseMultimodalModel):
     anthropic_version: str = "2023-06-01"
     beta_header: str = None
     enable_thinking: bool = False
+    tools: List = None
+
+    def _encode_image(self, image_path: str, max_file_size: int = 5 * 1024 * 1024) -> tuple[str, str]:
+        """Encode image to base64, ensuring it stays under max_file_size bytes."""
+        media_type = get_image_media_type(image_path)
+        
+        with Image.open(image_path) as img:
+            if img.mode == 'RGBA' and media_type == 'image/jpeg':
+                background = Image.new('RGB', img.size, (255, 255, 255))
+                background.paste(img, mask=img.split()[-1])
+                img = background
+            
+            # Start with original size and high quality
+            current_img = img.copy()
+            quality = 95
+            scale_factor = 1.0
+            
+            while True:
+                img_buffer = io.BytesIO()
+                
+                if media_type == 'image/png':
+                    current_img.save(img_buffer, format='PNG', optimize=True)
+                else:
+                    current_img.save(img_buffer, format='JPEG', quality=quality, optimize=True)
+                
+                img_size = img_buffer.tell()
+                
+                # Check if we're under the limit
+                if img_size <= max_file_size:
+                    print(f"Downscaled image to {img_size} bytes")
+                    img_data = base64.b64encode(img_buffer.getvalue()).decode("utf-8")
+                    break
+                
+                # Reduce quality first (for JPEG)
+                if media_type == 'image/jpeg' and quality > 20:
+                    quality -= 10
+                # Then reduce dimensions
+                else:
+                    scale_factor *= 0.9
+                    new_size = (int(img.size[0] * scale_factor), int(img.size[1] * scale_factor))
+                    current_img = img.resize(new_size, Image.Resampling.LANCZOS)
+                    quality = 85  # Reset quality when we resize
+                
+                # Safety check to avoid infinite loop
+                if scale_factor < 0.1:
+                    raise ValueError(f"Cannot compress image {image_path} to under {max_file_size} bytes")
+        
+        return img_data, media_type
 
     def _build_headers(self) -> dict:
         headers = {
@@ -146,6 +198,9 @@ class AnthropicClient(BaseMultimodalModel):
             "max_tokens": self.max_tokens,
             "messages": [{"role": "user", "content": content}]
         }
+
+        if self.tools:
+            payload["tools"] = self.tools
         
         if self.enable_thinking:
             payload["thinking"] = {"type": "enabled", "budget_tokens": self.max_tokens - 32000}
@@ -253,14 +308,13 @@ class OpenAIClient(BaseMultimodalModel):
              payload["temperature"] = self.temperature
 
         if hasattr(self, 'max_tokens') and self.max_tokens > 0:
-             payload["max_tokens"] = self.max_tokens
+             payload["max_output_tokens"] = self.max_tokens
 
         if self.reasoning_effort:
              payload["reasoning"] = {"effort": self.reasoning_effort}
 
         if self.tools:
              payload["tools"] = self.tools
-
         return payload
 
     def _extract_response_text(self, response: requests.Response) -> str:
@@ -271,13 +325,18 @@ class OpenAIClient(BaseMultimodalModel):
                 error_details = response_json.get("error") or response_json.get("incomplete_details") or f"Status: {status}"
                 raise ValueError(f"Response generation not completed: {error_details}")
             
-            content_items = response_json['output'][0]['content']
-
-            response_text = ''.join(
-                item.get('text', '')
-                for item in content_items
-                if item.get('type') == 'output_text'
-            )
+            response_text = ""
+            for item in response_json['output']:
+                if item.get('type') == "message":
+                    content_items = item['content']
+                
+                    response_text += '\n'.join(
+                        item.get('text', '')
+                        for item in content_items
+                        if item.get('type') == 'output_text'
+                    )
+                elif item.get('type') == "web_search_call":
+                    response_text += f"<web_search_call>\n"
 
             return response_text
         except (KeyError, IndexError, TypeError, ValueError, AttributeError) as e:
@@ -330,24 +389,32 @@ class OpenRouterClient(BaseMultimodalModel):
 class Claude3_7Sonnet(AnthropicClient):
     name = "Claude 3.7 Sonnet"
     model_identifier = "claude-3-7-sonnet-20250219"
+
+    tools = [{"type": "web_search_20250305", "name": "web_search"}]
 class Claude3_7SonnetThinking(AnthropicClient):
     name = "Claude 3.7 Sonnet (Thinking)"
     model_identifier = "claude-3-7-sonnet-20250219"
     enable_thinking = True
     rate_limit = 2
     beta_header = "output-128k-2025-02-19"
+
+    tools = [{"type": "web_search_20250305", "name": "web_search"}]
 class Claude4SonnetThinking(AnthropicClient):
     name = "Claude 4 Sonnet (Thinking)"
     model_identifier = "claude-sonnet-4-20250514"
     enable_thinking = True
     rate_limit = 2
     beta_header = "output-128k-2025-02-19"
+
+    tools = [{"type": "web_search_20250305", "name": "web_search"}]
 class Claude4OpusThinking(AnthropicClient):
     name = "Claude 4 Opus (Thinking)"
     model_identifier = "claude-opus-4-20250514"
     enable_thinking = True
     rate_limit = 2
     beta_header = "output-128k-2025-02-19"
+
+    tools = [{"type": "web_search_20250305", "name": "web_search"}]
 
 
 # Google Models
@@ -379,7 +446,7 @@ class GPT4o(OpenAIClient):
     model_identifier = "gpt-4o"
     rate_limit = 3
     
-    #TODO: add tools
+    tools = [{"type": "web_search_preview"}]
 class O3high(OpenAIClient):
     name = "o3-high"
     model_identifier = "o3"
