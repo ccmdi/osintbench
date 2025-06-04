@@ -1,7 +1,6 @@
 import re
 import os
 import argparse
-from abc import ABC, abstractmethod
 from typing import Dict, Any
 
 import haversine
@@ -114,8 +113,11 @@ class Judge:
         return {"correct": correct, "score": 1 if correct else 0, "reasoning": reasoning}
 
 
+class JudgeParser:
+    def parse(self, response: str, task, case_id, run_folder = None) -> dict:
+        return response
 
-class LocationParser:
+class LocationParser(JudgeParser):
     def parse(self, response: str, task, case_id, run_folder = None) -> dict:
         lat_match = re.search(r'lat:\s*([-+]?\d+\.?\d*)', response, re.IGNORECASE)
         lng_match = re.search(r'lng:\s*([-+]?\d+\.?\d*)', response, re.IGNORECASE)
@@ -135,7 +137,7 @@ class LocationParser:
                 judge_response = judge.parse_location_response(response, task, case_id, run_folder)
             except Exception as e:
                 print(f"Judge parsing failed: {e}")
-                return None
+                return {'lat': None, 'lng': None}
 
             if judge_response:
                 import json
@@ -148,24 +150,25 @@ class LocationParser:
                 except json.JSONDecodeError:
                     raise ValueError("Invalid JSON response from judge")
             else:
-                return None
+                return {'lat': None, 'lng': None}
         
         return {
             'lat': lat,
             'lng': lng
         }
 
-def parse_response(response: str, task, case_id, run_folder = None) -> Any:
-    """Parse structured response based on task type"""
-    if task.type == 'location':
-        parser = LocationParser()
-        return parser.parse(response, task, case_id, run_folder)
+def get_parser(task_type: str) -> Any:
+    if task_type == 'location':
+        return LocationParser()
     else:
-        return response
+        return JudgeParser()
 
 def evaluate_answer(parsed_answer, task, case_id, run_folder = None) -> dict:   
     if task.type in ['location']:
-        if isinstance(parsed_answer, dict):
+        if isinstance(parsed_answer, dict) and parsed_answer is not None:
+            if parsed_answer.get('lat') is None or parsed_answer.get('lng') is None:
+                return {'score': 0.0, 'correct': False, 'refused': True}
+            
             distance_km = haversine.haversine(
                 (parsed_answer['lat'], parsed_answer['lng']),
                 (task.answer['lat'], task.answer['lng'])
@@ -198,31 +201,146 @@ def evaluate_answer(parsed_answer, task, case_id, run_folder = None) -> dict:
     return {'score': 0.0, 'correct': False, 'refused': True}
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Parse model responses and count valid ones.")
-    parser.add_argument("response_folder", type=str, help="Path to the response folder containing an 'output' subdirectory with .txt files.")
+    import json
+    from dotenv import load_dotenv
+    load_dotenv()
+    
+    parser = argparse.ArgumentParser(description="Re-evaluate existing model responses using current parsers and judges.")
+    parser.add_argument("response_folder", type=str, help="Path to the response folder (e.g., 'responses/Claude_4_Sonnet_basic_2024-01-15T10_30_45')")
+    parser.add_argument("--dataset", "-d", type=str, required=True, help="Dataset path to get ground truth (e.g., 'dataset/basic')")
     args = parser.parse_args()
-
+    
+    # Load dataset metadata for ground truth
+    metadata_path = os.path.join(args.dataset, "metadata.json")
+    if not os.path.exists(metadata_path):
+        print(f"Error: Dataset metadata '{metadata_path}' not found.")
+        exit(1)
+    
+    with open(metadata_path, "r") as f:
+        dataset = json.load(f)
+    
+    # Create lookup for tasks by case_id and task_id
+    task_lookup = {}
+    for case_data in dataset['cases']:
+        case_id = case_data['id']
+        for task_data in case_data['tasks']:
+            task_id = task_data['id']
+            task_lookup[(case_id, task_id)] = {
+                'type': task_data['type'],
+                'prompt': task_data['prompt'],
+                'answer': task_data['answer']
+            }
+    
     output_dir = os.path.join(args.response_folder, "output")
     if not os.path.isdir(output_dir):
         print(f"Error: Output directory '{output_dir}' not found.")
         exit(1)
 
+    # Load existing detailed results to get task information
+    results_path = os.path.join(args.response_folder, "results", "detailed.csv")
+    if not os.path.exists(results_path):
+        print(f"Error: Results file '{results_path}' not found.")
+        exit(1)
+    
+    import pandas as pd
+    existing_results = pd.read_csv(results_path)
+    
     valid_responses = 0
     total_files = 0
+    re_evaluation_results = []
 
     for filename in os.listdir(output_dir):
         if filename.endswith(".txt"):
             total_files += 1
+            case_id = int(os.path.splitext(filename)[0])  # Extract case_id from filename
             file_path = os.path.join(output_dir, filename)
+            
             try:
                 with open(file_path, "r", encoding="utf-8") as f:
-                    content = f.read()
-                g = parse_response(content)
-                print(os.path.splitext(os.path.basename(filename))[0], g.lat, g.lng)
-                valid_responses += 1
-            except ValueError as e:
-                print(f"Invalid response in {filename}: {e}")
+                    response_content = f.read()
+                
+                # Get all tasks for this case from existing results
+                case_tasks = existing_results[existing_results['case_id'] == case_id]
+                
+                for _, row in case_tasks.iterrows():
+                    task_id = row['task_id']
+                    task_type = row['task_type']
+                    
+                    # Get ground truth from task_lookup
+                    if (case_id, task_id) not in task_lookup:
+                        print(f"Warning: Task {task_id} for case {case_id} not found in dataset")
+                        continue
+                    
+                    ground_truth = task_lookup[(case_id, task_id)]
+                    
+                    try:
+                        # Create simple task object with dot notation access
+                        from types import SimpleNamespace
+                        task = SimpleNamespace(
+                            task_id=task_id,
+                            type=task_type,
+                            prompt=ground_truth['prompt'],
+                            answer=ground_truth['answer']
+                        )
+                        
+                        # Parse the response
+                        parser = get_parser(task_type)
+                        parsed_answer = parser.parse(response_content, task, case_id, args.response_folder)
+                        
+                        # Evaluate the parsed answer
+                        evaluation = evaluate_answer(parsed_answer, task, case_id, args.response_folder)
+                        
+                        re_evaluation_results.append({
+                            "case_id": case_id,
+                            "task_id": task_id,
+                            "task_type": task_type,
+                            "prompt": task.prompt,
+                            "refused": evaluation.get('refused', False),
+                            "error_message": evaluation.get('error_message', None),
+                            "parser": parser.__class__.__name__,
+                            "score": evaluation.get('score', 0),
+                            "correct": evaluation.get('correct', False)
+                        })
+                        
+                        print(f"Case {case_id}, Task {task_id} ({task_type}): Score {evaluation.get('score', 0):.2f}, Correct: {evaluation.get('correct', False)}")
+                        
+                        if evaluation.get('correct', False):
+                            valid_responses += 1
+                            
+                    except Exception as parse_error:
+                        print(f"Error parsing/evaluating case {case_id}, task {task_id}: {parse_error}")
+                        re_evaluation_results.append({
+                            "case_id": case_id,
+                            "task_id": task_id,
+                            "task_type": task_type,
+                            "prompt": task.prompt,
+                            "refused": True,
+                            "error_message": str(parse_error),
+                            "parser": parser.__class__.__name__,
+                            "score": 0,
+                            "correct": False,
+                        })
+                        
             except Exception as e:
                 print(f"Error processing {filename}: {e}")
 
-    print(f"Found {valid_responses} valid responses out of {total_files} files in {output_dir}") 
+    # Save re-evaluation results
+    re_eval_df = pd.DataFrame(re_evaluation_results)
+    re_eval_path = os.path.join(args.response_folder, "results", "re_evaluation.csv")
+    re_eval_df.to_csv(re_eval_path, index=False)
+    
+    print(f"\nRe-evaluation complete!")
+    print(f"Processed {total_files} response files")
+    print(f"Total task evaluations: {len(re_evaluation_results)}")
+    print(f"Correct answers: {valid_responses}")
+    print(f"Overall accuracy: {valid_responses/len(re_evaluation_results)*100:.1f}%" if re_evaluation_results else "0%")
+    print(f"Results saved to: {re_eval_path}")
+    
+    # Show comparison with original results
+    if len(re_evaluation_results) > 0:
+        original_correct = sum(1 for _, row in existing_results.iterrows() if row.get('correct'))
+        new_correct = sum(1 for r in re_evaluation_results if r['correct'])
+        print(f"\nComparison:")
+        print(f"Original correct: {original_correct}")
+        print(f"New correct: {new_correct}")
+        print(f"Difference: {new_correct - original_correct:+d}")

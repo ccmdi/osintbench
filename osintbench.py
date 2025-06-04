@@ -7,7 +7,7 @@ import datetime
 import argparse
 from dotenv import load_dotenv
 
-from scripts.eval import parse_response, evaluate_answer
+from scripts.eval import evaluate_answer, get_parser
 
 from models import *
 from prompt import get_prompt
@@ -39,7 +39,7 @@ class Case:
 
     @classmethod
     def from_dict(cls, data: dict, dataset_path: str = None) -> 'Case':
-        images = data['images']
+        images = data.get('images', [])
         if dataset_path:
             images = [os.path.join(dataset_path, img_path) for img_path in images]
         
@@ -92,7 +92,7 @@ class OsintBenchmark:
         
     def _load_dataset(self) -> List[Case]:
         """Loads list of cases from the dataset."""
-        with open(os.path.join(self.dataset_path, "metadata.json"), "r") as f:
+        with open(os.path.join(self.dataset_path, "metadata.json"), "r", encoding="utf-8") as f:
             data = json.load(f)
             
         cases = []
@@ -134,8 +134,11 @@ class OsintBenchmark:
                 
                 try:
                     for task in case.tasks:
-                        answer = parse_response(response, task, case.case_id, run_folder)
+                        parser = get_parser(task.type)
+                        answer = parser.parse(response, task, case.case_id, run_folder)
                         evaluation = evaluate_answer(answer, task, case.case_id, run_folder)
+                        evaluation['parser'] = parser.__class__.__name__
+
                         result = BenchmarkResult(
                             case_obj=case, 
                             task_id=task.task_id, 
@@ -251,8 +254,9 @@ class OsintBenchmark:
                 "prompt": task.prompt,
                 "refused": r.refused,
                 "error_message": r.error_message,
+                "parser": r.evaluation.get('parser') if r.evaluation else None,
                 "score": r.evaluation.get('score') if r.evaluation else None,
-                "correct": r.evaluation.get('correct') if r.evaluation else None
+                "correct": r.evaluation.get('correct') if r.evaluation else None,
             })
         
         pd.DataFrame(records).to_csv(f"{output_path}detailed.csv", index=False)
