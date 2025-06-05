@@ -3,7 +3,8 @@ import requests
 import os
 from abc import ABC, abstractmethod
 from ratelimit import limits, sleep_and_retry
-from typing import List
+from typing import List, Tuple
+from osintbench import Case
 
 def get_image_media_type(image_path: str) -> str:
     """Determine the media type based on file extension."""
@@ -35,45 +36,81 @@ class BaseMultimodalModel(ABC):
         self.api_key = api_key
 
     def _encode_image(self, image_path: str) -> tuple[str, str]:
+        """Encode image to base64 and return with media type."""
         media_type = get_image_media_type(image_path)
         with open(image_path, "rb") as img_file:
             img_data = base64.b64encode(img_file.read()).decode("utf-8")
         return img_data, media_type
 
-    @abstractmethod
-    def _build_headers(self) -> dict: pass
+    def _encode_case_images(self, case: Case) -> List[Tuple[str, str]]:
+        """Encode all images from a case."""
+        return [self._encode_image(image_path) for image_path in case.images]
+
+    def _format_case_info(self, case: Case) -> str:
+        """Format case information as a text string."""
+        return f"<info>{case.info}</info>"
+
+    def _format_case_tasks(self, case: Case) -> List[str]:
+        """Format case tasks as a list of text strings."""
+        return [f"<task>{task.type}: {task.prompt}</task>" for task in case.tasks]
+
+    def _build_text_content(self, prompt: str, case: Case) -> List[str]:
+        """Build the text content components for a case."""
+        content = ["<system>", prompt, self._format_case_info(case), "</system>"]
+        content.extend(self._format_case_tasks(case))
+        return content
 
     @abstractmethod
-    def _build_payload(self, prompt: str, img_data: str, media_type: str) -> dict: pass
+    def _build_headers(self) -> dict: 
+        """Build request headers specific to the client."""
+        pass
 
     @abstractmethod
-    def _get_endpoint(self) -> str: pass
+    def _build_payload(self, text_content: List[str], encoded_images: List[Tuple[str, str]]) -> dict: 
+        """Build the API payload using text content and encoded images."""
+        pass
 
     @abstractmethod
-    def _extract_response_text(self, response: requests.Response) -> str: pass
+    def _get_endpoint(self) -> str: 
+        """Get the API endpoint URL."""
+        pass
 
-    def query(self, image_path: str, prompt: str, run_folder: str = None, location_id: str = None) -> str:
+    @abstractmethod
+    def _extract_response_text(self, response: requests.Response) -> str: 
+        """Extract text from the API response."""
+        pass
+        
+    def query(self, prompt: str, case: Case = None, run_folder: str = None) -> str:
         """
         Public method to query the model.
         """
 
         def api():
-            img_data, media_type = self._encode_image(image_path)
-            headers = self._build_headers()
-            payload = self._build_payload(prompt, img_data, media_type)
-            endpoint = self._get_endpoint()
+            if case:
+                encoded_images = self._encode_case_images(case)
+                text_content = self._build_text_content(prompt, case)
+            
+                headers = self._build_headers()
+                payload = self._build_payload(text_content, encoded_images)
+                endpoint = self._get_endpoint()
+            else:
+                #TODO: horrible handling please kill me
+                headers = self._build_headers()
+                payload = self._build_payload(prompt)
+                endpoint = self._get_endpoint()
+            
             try:
                 response = requests.post(endpoint, headers=headers, json=payload)
                 response.raise_for_status()
-                if run_folder and location_id:
+                if run_folder and case.case_id:
                     os.makedirs(f"{run_folder}/json/", exist_ok=True)
-                    with open(f"{run_folder}/json/{location_id}.json", "w", encoding="utf-8") as f:
+                    with open(f"{run_folder}/json/{case.case_id}.json", "w", encoding="utf-8") as f:
                         f.write(response.text)
                 return self._extract_response_text(response)
             except requests.exceptions.RequestException as e:
                 status_code = e.response.status_code if e.response is not None else "N/A"
                 error_text = e.response.text if e.response is not None else str(e)
-                print(f"API error ({status_code}) for {self.name}: {error_text[:100]}...")
+                print(f"API error ({status_code}) for {self.name}: {error_text}...")
                 raise Exception(f"{self.name} API error ({status_code})") from e
             except Exception as e:
                 print(f"Unexpected error in {self.name} core logic: {str(e)}")
@@ -84,7 +121,6 @@ class BaseMultimodalModel(ABC):
         )
 
         return call()
-
 
 
 class AnthropicClient(BaseMultimodalModel):
@@ -108,16 +144,29 @@ class AnthropicClient(BaseMultimodalModel):
              headers["anthropic-beta"] = effective_beta_header
         return headers
 
-    def _build_payload(self, prompt: str, img_data: str, media_type: str) -> dict:
+    def _build_payload(self, text_content: List[str], encoded_images: List[Tuple[str, str]] = None) -> dict:
+        content = []
+        for text in text_content:
+            content.append({"type": "text", "text": text})
+        
+        if encoded_images:
+            for img_data, media_type in encoded_images:
+                content.append({
+                    "type": "image", 
+                    "source": {
+                        "type": "base64", 
+                        "media_type": media_type, 
+                        "data": img_data
+                    }
+                })
+
         payload = {
             "model": self.model_identifier,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
-            "messages": [{"role": "user", "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": img_data}}
-            ]}]
+            "messages": [{"role": "user", "content": content}]
         }
+        
         if self.enable_thinking:
             payload["thinking"] = {"type": "enabled", "budget_tokens": self.max_tokens - 512}
             if "temperature" in payload:
@@ -155,12 +204,22 @@ class GoogleClient(BaseMultimodalModel):
     def _build_headers(self) -> dict:
         return {"Content-Type": "application/json"}
 
-    def _build_payload(self, prompt: str, img_data: str, media_type: str) -> dict:
+    def _build_payload(self, text_content: List[str], encoded_images: List[Tuple[str, str]] = None) -> dict:
+        parts = []
+        for text in text_content:
+            parts.append({"text": text})
+        
+        if encoded_images:
+            for img_data, media_type in encoded_images:
+                parts.append({
+                    "inline_data": {
+                        "mime_type": media_type, 
+                        "data": img_data
+                    }
+                })
+
         payload = {
-            "contents": [{"parts": [
-                {"text": prompt},
-                {"inline_data": {"mime_type": media_type, "data": img_data}}
-            ]}],
+            "contents": [{"parts": parts}],
             "generationConfig": {
                 "temperature": self.temperature,
                 "maxOutputTokens": self.max_tokens
@@ -195,26 +254,26 @@ class OpenAIClient(BaseMultimodalModel):
     def _build_headers(self) -> dict:
         return {"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"}
 
-    def _build_payload(self, prompt: str, img_data: str, media_type: str) -> dict:
-        image_url = f"data:{media_type};base64,{img_data}"
-
-        image_content = {
-            "type": "input_image",
-            "image_url": image_url
-        }
-        if self.detail:
-            image_content["detail"] = self.detail
+    def _build_payload(self, text_content: List[str], encoded_images: List[Tuple[str, str]] = None) -> dict:
+        content = []
+        for text in text_content:
+            content.append({"type": "input_text", "text": text})
+        
+        if encoded_images:
+            for img_data, media_type in encoded_images:
+                image_url = f"data:{media_type};base64,{img_data}"
+                image_content = {
+                    "type": "input_image",
+                    "image_url": image_url
+                }
+                if self.detail:
+                    image_content["detail"] = self.detail
+                content.append(image_content)
 
         payload = {
             "model": self.model_identifier,
-            "input": [
-                {"role": "user", "content": [
-                    {"type": "input_text", "text": prompt},
-                    image_content
-                ]}
-             ],
+            "input": [{"role": "user", "content": content}],
         }
-
 
         if hasattr(self, 'temperature') and self.temperature >= 0:
              payload["temperature"] = self.temperature
@@ -265,15 +324,26 @@ class OpenRouterClient(BaseMultimodalModel):
             "HTTP-Referer": self.referer_url
         }
 
-    def _build_payload(self, prompt: str, img_data: str, media_type: str) -> dict:
-        image_url = f"data:{media_type};base64,{img_data}"
+    def _build_payload(self, text_content: List[str], encoded_images: List[Tuple[str, str]] = None) -> dict:
+        content = []
+        for text in text_content:
+            content.append({"type": "text", "text": text})
+        
+        if encoded_images:
+            for img_data, media_type in encoded_images:
+                image_url = f"data:{media_type};base64,{img_data}"
+                image_content = {
+                    "type": "input_image",
+                    "image_url": image_url
+                }
+                if self.detail:
+                    image_content["detail"] = self.detail
+                content.append(image_content)
+        
         return {
             "model": self.model_identifier,
             "max_tokens": self.max_tokens,
-            "messages": [{"role": "user", "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": image_url}}
-            ]}],
+            "messages": [{"role": "user", "content": content}],
             "temperature": self.temperature
         }
 
@@ -286,14 +356,6 @@ class OpenRouterClient(BaseMultimodalModel):
 
 
 # Anthropic Models
-class Claude3_5Haiku(AnthropicClient):
-    name = "Claude 3.5 Haiku"
-    model_identifier = "claude-3-haiku-20240307"
-    max_tokens = 4096
-class Claude3_5Sonnet(AnthropicClient):
-    name = "Claude 3.5 Sonnet" 
-    model_identifier = "claude-3-5-sonnet-20241022"
-    max_tokens = 8192
 class Claude3_7Sonnet(AnthropicClient):
     name = "Claude 3.7 Sonnet"
     model_identifier = "claude-3-7-sonnet-20250219"
@@ -303,28 +365,30 @@ class Claude3_7SonnetThinking(AnthropicClient):
     enable_thinking = True
     rate_limit = 2
     beta_header = "output-128k-2025-02-19"
+class Claude4SonnetThinking(AnthropicClient):
+    name = "Claude 4 Sonnet (Thinking)"
+    model_identifier = "claude-sonnet-4-20250514"
+    enable_thinking = True
+    rate_limit = 2
+    beta_header = "output-128k-2025-02-19"
+class Claude4OpusThinking(AnthropicClient):
+    name = "Claude 4 Opus (Thinking)"
+    model_identifier = "claude-opus-4-20250514"
+    enable_thinking = True
+    rate_limit = 2
+    beta_header = "output-128k-2025-02-19"
 
 
 # Google Models
-class Gemini1_5Flash(GoogleClient):
-    name = "Gemini 1.5 Flash"
-    model_identifier = "gemini-1.5-flash"
-    rate_limit = 10
-class Gemini1_5Pro(GoogleClient):
-    name = "Gemini 1.5 Pro"
-    model_identifier = "gemini-1.5-pro"
-    rate_limit = 2
 class Gemini2Flash(GoogleClient):
     name = "Gemini 2.0 Flash"
     model_identifier = "gemini-2.0-flash"
     rate_limit = 10
+    api_version_path = "v1beta"
+
+    tools = [{"google_search": {}}]
 class Gemini2_5Pro(GoogleClient):
     name = "Gemini 2.5 Pro"
-    model_identifier = "gemini-2.5-pro-preview-05-06"
-    rate_limit = 2
-    api_version_path = "v1beta"
-class Gemini2_5ProSearch(GoogleClient):
-    name = "Gemini 2.5 Pro (with Search)"
     model_identifier = "gemini-2.5-pro-preview-05-06"
     rate_limit = 2
     api_version_path = "v1beta"
@@ -336,32 +400,15 @@ class Gemini2_5Flash(GoogleClient):
     rate_limit = 2
     api_version_path = "v1beta"
 
+    tools = [{"google_search": {}}]
 
 # OpenAI Models
-class GPT4oMini(OpenAIClient):
-    name = "GPT-4o Mini"
-    model_identifier = "gpt-4o-mini"
 class GPT4o(OpenAIClient):
     name = "GPT-4o"
     model_identifier = "gpt-4o"
     rate_limit = 3
-class GPT4_1(OpenAIClient):
-    name = "GPT-4.1"
-    model_identifier = "gpt-4.1"
-    rate_limit = 3
-class O1(OpenAIClient):
-    name = "o1"
-    model_identifier = "o1"
-    rate_limit = 2
-class O3(OpenAIClient):
-    name = "o3"
-    model_identifier = "o3"
-    rate_limit = 2
-    reasoning_effort = "medium"
-
-    # NOT SUPPORTED
-    # max_tokens = -1
-    # temperature = -1
+    
+    #TODO: add tools
 class O3high(OpenAIClient):
     name = "o3-high"
     model_identifier = "o3"
@@ -372,14 +419,9 @@ class O3high(OpenAIClient):
     # NOT SUPPORTED
     # max_tokens = -1
     # temperature = -1
-class O4mini(OpenAIClient):
-    name = "o4-mini"
-    model_identifier = "o4-mini"
-    rate_limit = 5
 
-    # NOT SUPPORTED
-    max_tokens = -1
-    temperature = -1
+    
+    #TODO: add tools
 class O4minihigh(OpenAIClient):
     name = "o4-mini-high"
     model_identifier = "o4-mini"
@@ -390,19 +432,4 @@ class O4minihigh(OpenAIClient):
     max_tokens = -1
     temperature = -1
 
-# OpenRouter Models
-class Qwen25VL72b(OpenRouterClient):
-    name = "Qwen 2.5 VL 72B Instruct"
-    model_identifier = "qwen/qwen2.5-vl-72b-instruct"
-    rate_limit = 20
-class Llama4Maverick(OpenRouterClient):
-    name = "Llama 4 Maverick"
-    model_identifier = "meta-llama/llama-4-maverick"
-class Pixtral12b(OpenRouterClient): model_identifier = "mistralai/pixtral-12b"
-class Gemma27b(OpenRouterClient):
-    name = "Gemma 27B"
-    model_identifier = "google/gemma-3-27b-it:free"
-    rate_limit = 10
-class Phi4Instruct(OpenRouterClient):
-    name = "Phi 4 Instruct"
-    model_identifier = "microsoft/phi-4-multimodal-instruct"
+    #TODO: add tools
