@@ -1,12 +1,12 @@
 SYSTEM_PROMPT_BASE = """
 You are participating in an OSINT challenge. You are given task(s) that you must provide answers to using the provided evidence and any tools you have available.
 For instance, you have access to Search, which is OFTEN required to give answers to tasks. You may need to look at multiple sources, like news articles, social media pages, online images, etc.
-You should explore the evidence in detail. For instance, if you have positive reverse image search results, you might consider visiting the webpages that contain the images for more information.
-EXIF data can also contain useful information about images, which is provided to you if available.
+You should explore the evidence in detail. For instance, if you have positive reverse image search results, you might want to compare the image to the original to see if they are the same.
+EXIF data can also contain useful information about images, which is provided to you if available. However, it may not always be available.
 
 Take your time to reason through evidence and clues; you should provide the reasoning for your answer.
 
-Even if you are unsure, you SHOULD still provide an answer. Giving a wrong answer is much better than giving no answer.
+Even if you are unsure, you SHOULD still provide an answer. Giving a wrong answer is much better than giving no answer. "Unable to determine" will receive no credit, while a wild guess might receive *some*.
 """
 
 SYSTEM_PROMPT_PRESTRUCTURE = """
@@ -48,7 +48,6 @@ conclusion: [conclusion to a question - must be ONE answer, no hedging (you cann
 """
 
 import os
-from tools import get_exif_data, reverse_image_search
 
 def format_case_info(case) -> str:
     """Format case information as a text string."""
@@ -57,13 +56,7 @@ def format_case_info(case) -> str:
     if case.images:
         for img in case.images:
             img_name = os.path.basename(img)
-            exif = get_exif_data(img)
-            # print("reversing the image search")
-            # reverse_img_search_results = reverse_image_search(img)
-            if exif:
-                case_info += f"Here is the EXIF data for image {img_name}: <exif>\n{exif}\n</exif>\n"
-            # if reverse_img_search_results:
-                # case_info += f"Here are the results of reverse image search for image {img_name}: <reverse_img_search>\n{reverse_img_search_results}\n</reverse_img_search>\n"
+            case_info += f"Image available: {img_name}\n"
 
     return f"<info>{case_info}</info>\n"
 

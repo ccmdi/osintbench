@@ -1,5 +1,8 @@
 def get_exif_data(image_path: str) -> dict:
     import piexif
+    import os
+
+    image_path = os.path.join("dataset", "basic", "images", image_path)
 
     try:
         exif_dict = piexif.load(image_path, True)
@@ -17,13 +20,159 @@ def get_exif_data(image_path: str) -> dict:
             return None
 
 
-def visit_webpage(url: str) -> str:
-    #TODO
-    pass
-
-def reverse_image_search(image_path: str, use_cache: bool = True) -> list:
+def visual_reverse_image_search(image_path: str, use_cache: bool = False) -> dict:
     """
-    Performs a reverse image search using Google Images and returns the first 10 results.
+    Performs a reverse image search and returns the first result's image for comparison.
+    
+    Args:
+        image_path (str): Path to the image file (e.g., "dataset/basic/images/16.jpg")
+        use_cache (bool): Whether to use cached results if available
+        
+    Returns:
+        dict: Contains the first search result's image for visual comparison
+    """
+    import requests
+    import base64
+    from PIL import Image
+    import io
+    import os
+    from playwright.sync_api import sync_playwright
+    
+    image_path = os.path.join("dataset", "basic", "images", image_path)
+    
+    # Get the basic search results using your existing function
+    search_results = reverse_image_search_results(image_path, use_cache)
+    
+    if not search_results:
+        return {
+            "success": False,
+            "message": "No reverse image search results found",
+            "original_image": image_path
+        }
+    
+    print(f"🎯 Found {len(search_results)} search results, looking for images...")
+    
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        
+        try:
+            # Try each search result to find an image
+            for i, result in enumerate(search_results[:5]):
+                print(f"🔍 Checking result {i+1}: {result['title'][:50]}...")
+                print(f"📍 URL: {result['url']}")
+                
+                # First try if it's a direct image URL
+                if any(result['url'].lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']):
+                    try:
+                        response = requests.get(
+                            result['url'], 
+                            timeout=15,
+                            headers={
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                            }
+                        )
+                        
+                        if response.status_code == 200 and response.headers.get('content-type', '').startswith('image/'):
+                            image_b64 = base64.b64encode(response.content).decode()
+                            image = Image.open(io.BytesIO(response.content))
+                            
+                            print(f"✅ Found direct image: {image.size} pixels, {image.format}")
+                            
+                            return {
+                                "success": True,
+                                "original_image": image_path,
+                                "found_image": image_b64,
+                                "image_info": {
+                                    "size": image.size,
+                                    "format": image.format,
+                                    "source_url": result['url'],
+                                    "source_title": result['title']
+                                }
+                            }
+                    except Exception as e:
+                        print(f"❌ Direct image failed: {str(e)}")
+                        continue
+                
+                # Try to extract image from the webpage
+                try:
+                    print("🌐 Visiting webpage to extract images...")
+                    page.goto(result['url'], timeout=20000, wait_until='domcontentloaded')
+                    page.wait_for_timeout(2000)  # Wait for dynamic content
+                    
+                    # Get all images on the page
+                    images = page.query_selector_all('img')
+                    
+                    for img in images:
+                        try:
+                            img_src = img.get_attribute('src')
+                            if not img_src:
+                                continue
+                            
+                            # Handle relative URLs
+                            if img_src.startswith('//'):
+                                img_src = 'https:' + img_src
+                            elif img_src.startswith('/'):
+                                from urllib.parse import urljoin
+                                img_src = urljoin(result['url'], img_src)
+                            elif not img_src.startswith('http'):
+                                continue
+                            
+                            # Try to download the image
+                            response = requests.get(
+                                img_src,
+                                timeout=10,
+                                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                            )
+                            
+                            if (response.status_code == 200 and 
+                                response.headers.get('content-type', '').startswith('image/') and
+                                len(response.content) > 10000):  # Filter out tiny images
+                                
+                                image = Image.open(io.BytesIO(response.content))
+                                if image.size[0] > 200 and image.size[1] > 200:  # Reasonable size
+                                    
+                                    image_b64 = base64.b64encode(response.content).decode()
+                                    
+                                    print(f"✅ Found image from webpage: {image.size} pixels, {image.format}")
+                                    
+                                    return {
+                                        "success": True,
+                                        "original_image": image_path,
+                                        "found_image": image_b64,
+                                        "image_info": {
+                                            "size": image.size,
+                                            "format": image.format,
+                                            "source_url": img_src,
+                                            "source_page": result['url'],
+                                            "source_title": result['title']
+                                        }
+                                    }
+                        
+                        except Exception as e:
+                            continue  # Try next image
+                            
+                except Exception as e:
+                    print(f"❌ Error accessing page {result['url']}: {str(e)}")
+                    continue
+            
+            # No images found
+            return {
+                "success": False,
+                "message": "No accessible images found in search results",
+                "original_image": image_path,
+                "search_results_checked": [r['url'] for r in search_results[:5]]
+            }
+            
+        finally:
+            browser.close()
+
+
+def reverse_image_search_results(image_path: str, use_cache: bool = False) -> list:
+    #TODO: this whole function is WRONG and BAD
+    # the serach results arent correct to what i see when i do it so
+    """
+    Performs a reverse image search using Google Images and returns the first 10 results as a list of dictionaries.
     
     Args:
         image_path (str): Path to the image file (e.g., "dataset/basic/images/16.jpg")
@@ -160,102 +309,53 @@ def reverse_image_search(image_path: str, use_cache: bool = True) -> list:
             file_input.send_keys(image_path_abs)
             
             # Wait for the results page to load
-            time.sleep(random.uniform(3, 5))
+            time.sleep(random.uniform(4, 6))
             
-            # Wait for search results to appear - reverse image search has different structure
-            time.sleep(3)  # Give more time for results to load
-            
-            # Debug: Print page source to see what we're working with
             print("Current URL:", driver.current_url)
             
             results = []
             
-            # First, try to find "Pages that include matching images" section
+            # Find external links in the search results
+            # Google shows results in various containers, we'll look for links that lead to external sites
             try:
-                # Look for the section with web results that contain the image
-                web_results_section = driver.find_elements(By.XPATH, "//h3[contains(text(), 'Pages that include matching images')]/following-sibling::div//a[@href]")
+                # Look for all clickable links that are not Google internal links
+                all_links = driver.find_elements(By.CSS_SELECTOR, "a[href]")
                 
-                for link in web_results_section[:10]:
+                for link in all_links:
                     try:
                         url = link.get_attribute("href")
                         title = link.text.strip()
                         
-                        if url and title and url.startswith("http") and "google.com" not in url:
+                        # Filter for external links only (exclude Google internal links)
+                        if (url and title and 
+                            url.startswith("http") and 
+                            "google.com" not in url and 
+                            "googleusercontent.com" not in url and
+                            "gstatic.com" not in url and
+                            len(title) > 3 and
+                            len(title) < 200):  # Reasonable title length
+                            
+                            # Skip if we already have this URL
+                            if any(result['url'] == url for result in results):
+                                continue
+                                
                             result = {
                                 'title': title,
                                 'url': url,
                                 'description': '',
-                                'source': 'Google Images - Pages with image'
+                                'source': 'Google Images Reverse Search'
                             }
                             
                             results.append(result)
-                    except:
+                            
+                            if len(results) >= 10:
+                                break
+                                
+                    except Exception as e:
                         continue
                         
             except Exception as e:
-                print(f"Error finding web results section: {e}")
-            
-            # If no results yet, try finding visually similar images section
-            if not results:
-                try:
-                    # Look for "Visually similar images" or related images
-                    similar_images = driver.find_elements(By.CSS_SELECTOR, "div[data-lpage] a[href]")
-                    
-                    for link in similar_images[:10]:
-                        try:
-                            url = link.get_attribute("href")
-                            # Get title from image alt text or nearby text
-                            title = link.get_attribute("title") or link.get_attribute("aria-label") or "Similar image"
-                            
-                            if url and url.startswith("http") and "google.com" not in url:
-                                result = {
-                                    'title': title,
-                                    'url': url,
-                                    'description': '',
-                                    'source': 'Google Images - Similar image'
-                                }
-                                
-                                results.append(result)
-                        except:
-                            continue
-                            
-                except Exception as e:
-                    print(f"Error finding similar images: {e}")
-            
-            # Fallback: Try to find ANY external links on the page
-            if not results:
-                try:
-                    print("Trying fallback method - finding all external links")
-                    all_links = driver.find_elements(By.CSS_SELECTOR, "a[href]")
-                    
-                    for link in all_links:
-                        try:
-                            url = link.get_attribute("href")
-                            title = link.text.strip()
-                            
-                            # Filter for external links only
-                            if (url and title and 
-                                url.startswith("http") and 
-                                "google.com" not in url and 
-                                "googleusercontent.com" not in url and
-                                len(title) > 3):
-                                
-                                result = {
-                                    'title': title,
-                                    'url': url,
-                                    'description': '',
-                                    'source': 'Google Images - External link'
-                                }
-                                
-                                results.append(result)
-                                
-                                if len(results) >= 10:
-                                    break
-                        except:
-                            continue
-                            
-                except Exception as e:
-                    print(f"Error in fallback method: {e}")
+                print(f"Error finding search results: {e}")
             
             # Debug: Print what we found
             print(f"Found {len(results)} results")
@@ -265,9 +365,7 @@ def reverse_image_search(image_path: str, use_cache: bool = True) -> list:
             # Save results to cache
             if results:
                 save_cache(cache_path, results)
-            
-            # If still no results, save page source for debugging
-            if not results:
+            else:
                 print("No results found. Saving page source for debugging...")
                 with open("debug_page_source.html", "w", encoding="utf-8") as f:
                     f.write(driver.page_source)
@@ -283,7 +381,36 @@ def reverse_image_search(image_path: str, use_cache: bool = True) -> list:
         print(f"Error performing reverse image search: {str(e)}")
         return []
     
-#TODO
-# TOOLS = {
-#     []
-# }
+
+VISUAL_REVERSE_SEARCH_TOOL = {
+    "name": "visual_reverse_image_search",
+    "description": "Performs reverse image search on an image file and shows the visual results. Can help with identifying the source of an image.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "image_path": {
+                "type": "string",
+                "description": "Name of the file to search for (e.g., 'X.jpg' or 'X.png')"
+            }
+        },
+        "required": ["image_path"]
+    }
+}
+
+GET_EXIF_TOOL = {
+    "name": "get_exif_data",
+    "description": "Extracts EXIF metadata from an image file, including camera settings, GPS coordinates, timestamps, and other technical information. Returns None if no EXIF data is found or if the file format doesn't support EXIF.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "image_path": {
+                "type": "string",
+                "description": "Name of the image file to extract EXIF data from (e.g., 'X.jpg' or 'X.png')"
+            }
+        },
+        "required": ["image_path"]
+    }
+}
+
+
+TOOLS = []

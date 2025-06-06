@@ -3,9 +3,10 @@ import requests
 import os
 from abc import ABC, abstractmethod
 from ratelimit import limits, sleep_and_retry
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Any
 from PIL import Image
 import io
+from tools import TOOLS
 
 def get_image_media_type(image_path: str) -> str:
     """Determine the media type based on file extension."""
@@ -18,6 +19,13 @@ def get_image_media_type(image_path: str) -> str:
         return "image/webp"
     else:
         return "image/jpeg" # Default fallback
+
+def encode_image(image_path: str) -> tuple[str, str]:
+    """Encode image to base64 and return with media type."""
+    media_type = get_image_media_type(image_path)
+    with open(image_path, "rb") as img_file:
+        img_data = base64.b64encode(img_file.read()).decode("utf-8")
+    return img_data, media_type
 
 class BaseMultimodalModel(ABC):
     """Abstract base class for multimodal models."""
@@ -38,17 +46,6 @@ class BaseMultimodalModel(ABC):
              raise NotImplementedError(f"model_identifier must be set in {self.name}")
         self.api_key = api_key
 
-    def _encode_image(self, image_path: str) -> tuple[str, str]:
-        """Encode image to base64 and return with media type."""
-        media_type = get_image_media_type(image_path)
-        with open(image_path, "rb") as img_file:
-            img_data = base64.b64encode(img_file.read()).decode("utf-8")
-        return img_data, media_type
-
-    def _encode_case_images(self, case) -> List[Tuple[str, str]]:
-        """Encode all images from a case."""
-        return [self._encode_image(image_path) for image_path in case.images]
-
     def _build_headers(self) -> dict: 
         """Build request headers specific to the client."""
         return {
@@ -65,11 +62,70 @@ class BaseMultimodalModel(ABC):
         """Get the API endpoint URL."""
         return self.base_url
 
+    def _execute_function_call(self, function_name: str, function_args: dict) -> dict:
+        """Execute a function call and return the result."""
+        from tools import get_exif_data, visual_reverse_image_search
+
+        #TODO: idk
+        def convert_bytes_to_str(obj):
+            if isinstance(obj, dict):
+                return {k: convert_bytes_to_str(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_bytes_to_str(elem) for elem in obj]
+            elif isinstance(obj, bytes):
+                try:
+                    return obj.decode('utf-8')
+                except UnicodeDecodeError:
+                    return obj.hex() # Fallback for non-utf8 bytes
+            else:
+                return obj
+        
+        try:
+            if function_name == "get_exif_data":
+                result = get_exif_data(**function_args)
+            elif function_name == "visual_reverse_image_search":
+                result = visual_reverse_image_search(**function_args)
+            else:
+                return {"error": f"Unknown function: {function_name}"}
+
+            # Sanitize the result to ensure it's JSON serializable
+            sanitized_result = convert_bytes_to_str(result)
+            return {"result": sanitized_result}
+
+        except Exception as e:
+            return {"error": f"Function execution failed: {str(e)}"}
+
     @abstractmethod
     def _extract_response_text(self, response: requests.Response) -> str: 
         """Extract text from the API response."""
         pass
-        
+
+    def save_json(self, response: requests.Response, run_folder: str, case) -> None:
+        if run_folder and case.case_id:
+            os.makedirs(f"{run_folder}/json/", exist_ok=True)
+            with open(f"{run_folder}/json/{case.case_id}.json", "w", encoding="utf-8") as f:
+                f.write(response.text)
+
+    #TODO
+    def _is_model_finished(self, response_json: dict) -> bool:
+        """The model is finished when it returns STOP with NO function calls."""
+        try:
+            candidate = response_json['candidates'][0]
+            parts = candidate['content']['parts']
+            finish_reason = candidate.get('finishReason', '')
+            
+            has_function_calls = any('functionCall' in part for part in parts)
+            
+            # Only finished if STOP with no function calls
+            if finish_reason == 'STOP':
+                return not has_function_calls  # Finished only if no function calls
+            
+            # Other finish reasons indicate completion
+            return finish_reason in ['MAX_TOKENS', 'SAFETY', 'RECITATION']
+            
+        except (KeyError, IndexError, TypeError):
+            return True
+
     def query(self, prompt: str, case = None, run_folder: str = None) -> str:
         """
         Public method to query the model.
@@ -77,22 +133,31 @@ class BaseMultimodalModel(ABC):
 
         def api():
             if case:
-                encoded_images = self._encode_case_images(case)
+                encoded_images = [encode_image(image_path) for image_path in case.images]
             else:
                 encoded_images = []
             
-            headers = self._build_headers()
-            payload = self._build_payload(prompt, encoded_images)
-            endpoint = self._get_endpoint()
+            self.headers = self._build_headers()
+            self.payload = self._build_payload([prompt], encoded_images)
+            self.endpoint = self._get_endpoint()
             
             try:
-                response = requests.post(endpoint, headers=headers, json=payload)
-                response.raise_for_status()
+                self.response = requests.post(self.endpoint, headers=self.headers, json=self.payload)
+                self.response.raise_for_status()
+
+                while not self._is_model_finished(self.response.json()):
+                    response_json = self.response.json()
+                    parts = response_json['candidates'][0]['content']['parts']
+                    self._handle_function_calls(parts)
+                                    
                 if run_folder and case.case_id:
-                    os.makedirs(f"{run_folder}/json/", exist_ok=True)
-                    with open(f"{run_folder}/json/{case.case_id}.json", "w", encoding="utf-8") as f:
-                        f.write(response.text)
-                return self._extract_response_text(response)
+                    #TODO: just temporary checking to make sure the conversation is continuing
+                    self.save_json(self.response, run_folder, case)
+                    with open(f"payload.json", "w", encoding="utf-8") as f:
+                        import json
+                        f.write(json.dumps(self.payload, indent=4))
+                
+                return self._extract_response_text(self.response)
             except requests.exceptions.RequestException as e:
                 status_code = e.response.status_code if e.response is not None else "N/A"
                 error_text = e.response.text if e.response is not None else str(e)
@@ -116,7 +181,7 @@ class AnthropicClient(BaseMultimodalModel):
     enable_thinking: bool = False
     tools: List = None
 
-    def _encode_image(self, image_path: str, max_file_size: int = 5 * 1024 * 1024) -> tuple[str, str]:
+    def _encode_image(self, image_path: str, max_file_size: int = 4 * 1024 * 1024) -> tuple[str, str]:
         """Encode image to base64, ensuring it stays under max_file_size bytes."""
         media_type = get_image_media_type(image_path)
         
@@ -254,7 +319,7 @@ class GoogleClient(BaseMultimodalModel):
                 })
 
         payload = {
-            "contents": [{"parts": parts}],
+            "contents": [{"parts": parts, "role": "user"}],
             "generationConfig": {
                 "temperature": self.temperature,
                 "maxOutputTokens": self.max_tokens
@@ -265,6 +330,60 @@ class GoogleClient(BaseMultimodalModel):
             payload["tools"] = self.tools
 
         return payload
+
+    def _handle_function_calls(self, parts: List[Dict[str, Any]]) -> str:
+        function_calls = []
+        text_parts = []
+        
+        for part in parts:
+            if 'functionCall' in part:
+                function_calls.append(part['functionCall'])
+            elif 'text' in part:
+                text_parts.append(part['text'])
+
+        # If there are function calls, execute them and continue the conversation
+        if function_calls:
+            print(f"🔧 Executing {len(function_calls)} function calls...")
+            
+            # Execute all function calls
+            function_responses = []
+            for func_call in function_calls:
+                func_name = func_call['name']
+                func_args = func_call.get('args', {})
+                print(f"  Calling {func_name}({func_args})")
+                
+                result = self._execute_function_call(func_name, func_args)
+                function_responses.append({
+                    "functionResponse": {
+                        "name": func_name,
+                        "response": result
+                    }
+                })
+            
+            # Add model's function call response to the existing payload
+            self.payload["contents"].append({
+                "parts": [{"functionCall": fc} for fc in function_calls], 
+                "role": "model"
+            })
+            
+            # Add function responses to the existing payload
+            self.payload["contents"].append({
+                "parts": function_responses, 
+                "role": "user"
+            })
+            
+            # Make follow-up request with the updated payload
+            headers = self._build_headers()
+            endpoint = self._get_endpoint()
+            self.response = requests.post(endpoint, headers=headers, json=self.payload)
+            self.response.raise_for_status()
+            
+            # Extract final text response
+            final_parts = self.response.json()['candidates'][0]['content']['parts']
+            return ''.join(part.get('text', '') for part in final_parts)
+        
+        # No function calls, just return text
+        return ''.join(text_parts)
 
     def _extract_response_text(self, response: requests.Response) -> str:
         response_json = response.json()
@@ -389,7 +508,7 @@ class OpenRouterClient(BaseMultimodalModel):
 class Claude3_7Sonnet(AnthropicClient):
     name = "Claude 3.7 Sonnet"
     model_identifier = "claude-3-7-sonnet-20250219"
-
+    
     tools = [{"type": "web_search_20250305", "name": "web_search"}]
 class Claude3_7SonnetThinking(AnthropicClient):
     name = "Claude 3.7 Sonnet (Thinking)"
@@ -403,7 +522,7 @@ class Claude4SonnetThinking(AnthropicClient):
     name = "Claude 4 Sonnet (Thinking)"
     model_identifier = "claude-sonnet-4-20250514"
     enable_thinking = True
-    rate_limit = 2
+    rate_limit = 0.2
     beta_header = "output-128k-2025-02-19"
 
     tools = [{"type": "web_search_20250305", "name": "web_search"}]
@@ -411,7 +530,7 @@ class Claude4OpusThinking(AnthropicClient):
     name = "Claude 4 Opus (Thinking)"
     model_identifier = "claude-opus-4-20250514"
     enable_thinking = True
-    rate_limit = 2
+    rate_limit = 0.2
     beta_header = "output-128k-2025-02-19"
 
     tools = [{"type": "web_search_20250305", "name": "web_search"}]
@@ -430,22 +549,29 @@ class Gemini2_5Pro(GoogleClient):
     model_identifier = "gemini-2.5-pro-preview-05-06"
     rate_limit = 2
     api_version_path = "v1beta"
-    
+
     tools = [{"google_search": {}}]
+class Gemini2_5Pro0605(GoogleClient):
+    name = "Gemini 2.5 Pro 06-05"
+    model_identifier = "gemini-2.5-pro-preview-06-05"
+    rate_limit = 2
+    api_version_path = "v1beta"
+    
+    tools = [{"function_declarations": TOOLS}]
 class Gemini2_5Flash(GoogleClient):
     name = "Gemini 2.5 Flash Preview"
     model_identifier = "gemini-2.5-flash-preview-04-17"
     rate_limit = 2
     api_version_path = "v1beta"
 
-    tools = [{"google_search": {}}]
+    tools = [{"function_declarations": TOOLS}]
 
 # OpenAI Models
 class GPT4o(OpenAIClient):
     name = "GPT-4o"
     model_identifier = "gpt-4o"
     rate_limit = 3
-    
+
     tools = [{"type": "web_search_preview"}]
 class O3high(OpenAIClient):
     name = "o3-high"
@@ -453,21 +579,15 @@ class O3high(OpenAIClient):
     rate_limit = 2
     reasoning_effort = "high"
     detail = "high"
+    max_tokens = -1
+    temperature = -1
+    tools = [{"type": "web_search_preview"}]
 
-    # NOT SUPPORTED
-    # max_tokens = -1
-    # temperature = -1
-
-    
-    #TODO: add tools
 class O4minihigh(OpenAIClient):
     name = "o4-mini-high"
     model_identifier = "o4-mini"
     rate_limit = 5
     reasoning_effort = "high"
-
-    # NOT SUPPORTED
     max_tokens = -1
     temperature = -1
-
-    #TODO: add tools
+    tools = [{"type": "web_search_preview"}]
