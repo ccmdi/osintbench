@@ -4,7 +4,7 @@
         "**/.env": true,
         "**/dist": true,
         "**/build": true,
-        "**/img": true,
+        "**/img": false,
         "LICENSE": true,
     },
     "[plaintext]": {
