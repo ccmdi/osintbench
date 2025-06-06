@@ -59,18 +59,17 @@ dataset/
 Where your dataset definition lives in `metadata.json`.
 
 ## Test a model
+> [!CAUTION]
+> Most outputs are evaluated by a judge model. Double-check responses before finalizing results.
+
 ```
 python osintbench.py --dataset <test name> --model <model name>
 ```
-
-> [!CAUTION]
-> All outputs are evaluated by a judge model. Double-check responses before finalizing results.
 
 Models go by their class name in `models.py`. Gemini 2.5 Flash goes by `Gemini2_5Flash`, for instance.
 
 # Roadmap
 - [x] **Better tool use**: EXIF extraction, reverse image search, etc.
-    * For right now, EXIF is passed as part of the prompt.
 - [ ] **High quality, human-verified datasets**
 - [ ] Video support
 - [ ] Recursive prompting/self-evaluation
