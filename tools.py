@@ -20,157 +20,252 @@ def get_exif_data(image_path: str) -> dict:
             return None
 
 
-def visual_reverse_image_search(image_path: str, use_cache: bool = False) -> dict:
+#TODO: Consider computer use?
+
+def google_search(query: str, limit: int = 10) -> list:
     """
-    Performs a reverse image search and returns the first result's image for comparison.
+    Search the web using Google
     
     Args:
-        image_path (str): Path to the image file (e.g., "dataset/basic/images/16.jpg")
-        use_cache (bool): Whether to use cached results if available
-        
+        query: Search query string
+        limit: Maximum number of results to return (default: 5, max: 10)
+    
     Returns:
-        dict: Contains the first search result's image for visual comparison
+        List of search results with title, url, and description
     """
     import requests
+    from bs4 import BeautifulSoup
+    
+    # Validate inputs
+    if not query or not isinstance(query, str):
+        return [{"error": "Invalid query parameter"}]
+    
+    limit = min(max(int(limit), 1), 10)  # Clamp between 1 and 10
+    
+    try:
+        # Perform Google search
+        response = requests.get(
+            'https://www.google.com/search',
+            params={'q': query},
+            headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            },
+            timeout=10
+        )
+        response.raise_for_status()
+        
+        # Parse results
+        soup = BeautifulSoup(response.text, 'html.parser')
+        results = []
+        
+        # Find search result containers
+        search_containers = soup.find_all('div', class_='g')
+        
+        for i, container in enumerate(search_containers):
+            if i >= limit:
+                break
+                
+            # Extract title
+            title_elem = container.find('h3')
+            if not title_elem:
+                continue
+                
+            # Extract link
+            link_elem = container.find('a')
+            if not link_elem or not link_elem.get('href'):
+                continue
+                
+            url = link_elem.get('href')
+            if not url.startswith('http'):
+                continue
+                
+            # Extract snippet/description
+            snippet_elem = container.find(class_='VwiC3b')
+            description = snippet_elem.get_text() if snippet_elem else ''
+            
+            results.append({
+                'title': title_elem.get_text(),
+                'url': url,
+                'description': description
+            })
+        
+        return results
+        
+    except requests.RequestException as e:
+        return [{"error": f"Search request failed: {str(e)}"}]
+    except Exception as e:
+        return [{"error": f"Search error: {str(e)}"}]
+
+def visit_website_html(url: str) -> dict:
+    """
+    Visit a website and return its HTML content and metadata
+    
+    Args:
+        url: The URL to visit
+    
+    Returns:
+        Dictionary with url, title, content, and metadata
+    """
+    import requests
+    from bs4 import BeautifulSoup
+    from urllib.parse import urljoin, urlparse
+    
+    # Validate URL
+    if not url or not isinstance(url, str):
+        return {"error": "Invalid URL parameter"}
+    
+    # Add protocol if missing
+    if not url.startswith(('http://', 'https://')):
+        url = 'https://' + url
+    
+    try:
+        # Fetch the webpage
+        response = requests.get(
+            url,
+            headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            },
+            timeout=15,
+            allow_redirects=True
+        )
+        response.raise_for_status()
+        
+        # Parse the HTML
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Extract title
+        title_elem = soup.find('title')
+        title = title_elem.get_text().strip() if title_elem else 'No title'
+        
+        # Extract meta description
+        meta_desc = soup.find('meta', attrs={'name': 'description'})
+        description = meta_desc.get('content', '').strip() if meta_desc else ''
+        
+        # Remove script and style elements
+        for script in soup(["script", "style"]):
+            script.decompose()
+        
+        # Get text content (cleaned)
+        text_content = soup.get_text()
+        # Clean up whitespace
+        lines = (line.strip() for line in text_content.splitlines())
+        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+        clean_text = ' '.join(chunk for chunk in chunks if chunk)
+        
+        # Limit content length to avoid huge responses
+        if len(clean_text) > 8000:
+            clean_text = clean_text[:8000] + "... [content truncated]"
+        
+        return {
+            "url": response.url,  # Final URL after redirects
+            "title": title,
+            "description": description,
+            "content": clean_text,
+            "status_code": response.status_code,
+            "content_type": response.headers.get('content-type', ''),
+            "content_length": len(clean_text)
+        }
+        
+    except requests.RequestException as e:
+        return {"error": f"Failed to fetch website: {str(e)}"}
+    except Exception as e:
+        return {"error": f"Error processing website: {str(e)}"}
+
+def overpass_turbo_query(query: str) -> dict:
+    #TODO
+    pass
+
+def sv_query(query: str):
+    pass
+
+def view_image_from_reverse_image_search(image_id: int) -> dict:
+    import os 
+    import json
     import base64
+    import re
     from PIL import Image
     import io
-    import os
-    from playwright.sync_api import sync_playwright
-    
-    image_path = os.path.join("dataset", "basic", "images", image_path)
-    
-    # Get the basic search results using your existing function
-    search_results = reverse_image_search_results(image_path, use_cache)
-    
-    if not search_results:
+
+    cache_path = os.path.join("dataset", "basic", "reverse-image-cache", "16.txt")
+
+    try:
+        with open(cache_path, "r") as f:
+            data = json.load(f)
+
+            if image_id >= len(data):
+                return {
+                    "id": image_id,
+                    "success": False,
+                    "error": f"Image ID {image_id} not found. Available IDs: 0-{len(data)-1}"
+                }
+
+            image_data = data[image_id]
+            img_b64 = image_data['img']
+            
+            # Handle different base64 formats
+            if img_b64.startswith('data:image/'):
+                # Extract the actual base64 data from data URL
+                # Format: data:image/jpeg;base64,/9j/4AAQ...
+                match = re.match(r'data:image/([^;]+);base64,(.+)', img_b64)
+                if match:
+                    format_type = match.group(1).upper()
+                    if format_type == 'JPG':
+                        format_type = 'JPEG'
+                    actual_b64 = match.group(2)
+                else:
+                    return {
+                        "id": image_id,
+                        "success": False,
+                        "error": "Invalid data URL format"
+                    }
+            else:
+                # Assume it's just raw base64 data
+                actual_b64 = img_b64
+                format_type = image_data.get('format', 'JPEG').upper()
+
+            # Validate base64 and get image info
+            try:
+                img_bytes = base64.b64decode(actual_b64)
+                img = Image.open(io.BytesIO(img_bytes))
+                
+                return {
+                    "id": image_id,
+                    "success": True,
+                    "found_image": actual_b64,  # Return clean base64 without data URL prefix
+                    "image_info": {
+                        "size": img.size,
+                        "format": format_type,
+                        "source_url": image_data.get('url', 'Unknown'),
+                        "source_title": image_data.get('title', 'Unknown')
+                    }
+                }
+            except Exception as decode_error:
+                return {
+                    "id": image_id,
+                    "success": False,
+                    "error": f"Failed to decode base64 image: {str(decode_error)}"
+                }
+
+    except FileNotFoundError:
         return {
+            "id": image_id,
             "success": False,
-            "message": "No reverse image search results found",
-            "original_image": image_path
+            "error": f"Cache file not found: {cache_path}"
         }
-    
-    print(f"🎯 Found {len(search_results)} search results, looking for images...")
-    
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        
-        try:
-            # Try each search result to find an image
-            for i, result in enumerate(search_results[:5]):
-                print(f"🔍 Checking result {i+1}: {result['title'][:50]}...")
-                print(f"📍 URL: {result['url']}")
-                
-                # First try if it's a direct image URL
-                if any(result['url'].lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']):
-                    try:
-                        response = requests.get(
-                            result['url'], 
-                            timeout=15,
-                            headers={
-                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                            }
-                        )
-                        
-                        if response.status_code == 200 and response.headers.get('content-type', '').startswith('image/'):
-                            image_b64 = base64.b64encode(response.content).decode()
-                            image = Image.open(io.BytesIO(response.content))
-                            
-                            print(f"✅ Found direct image: {image.size} pixels, {image.format}")
-                            
-                            return {
-                                "success": True,
-                                "original_image": image_path,
-                                "found_image": image_b64,
-                                "image_info": {
-                                    "size": image.size,
-                                    "format": image.format,
-                                    "source_url": result['url'],
-                                    "source_title": result['title']
-                                }
-                            }
-                    except Exception as e:
-                        print(f"❌ Direct image failed: {str(e)}")
-                        continue
-                
-                # Try to extract image from the webpage
-                try:
-                    print("🌐 Visiting webpage to extract images...")
-                    page.goto(result['url'], timeout=20000, wait_until='domcontentloaded')
-                    page.wait_for_timeout(2000)  # Wait for dynamic content
-                    
-                    # Get all images on the page
-                    images = page.query_selector_all('img')
-                    
-                    for img in images:
-                        try:
-                            img_src = img.get_attribute('src')
-                            if not img_src:
-                                continue
-                            
-                            # Handle relative URLs
-                            if img_src.startswith('//'):
-                                img_src = 'https:' + img_src
-                            elif img_src.startswith('/'):
-                                from urllib.parse import urljoin
-                                img_src = urljoin(result['url'], img_src)
-                            elif not img_src.startswith('http'):
-                                continue
-                            
-                            # Try to download the image
-                            response = requests.get(
-                                img_src,
-                                timeout=10,
-                                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-                            )
-                            
-                            if (response.status_code == 200 and 
-                                response.headers.get('content-type', '').startswith('image/') and
-                                len(response.content) > 10000):  # Filter out tiny images
-                                
-                                image = Image.open(io.BytesIO(response.content))
-                                if image.size[0] > 200 and image.size[1] > 200:  # Reasonable size
-                                    
-                                    image_b64 = base64.b64encode(response.content).decode()
-                                    
-                                    print(f"✅ Found image from webpage: {image.size} pixels, {image.format}")
-                                    
-                                    return {
-                                        "success": True,
-                                        "original_image": image_path,
-                                        "found_image": image_b64,
-                                        "image_info": {
-                                            "size": image.size,
-                                            "format": image.format,
-                                            "source_url": img_src,
-                                            "source_page": result['url'],
-                                            "source_title": result['title']
-                                        }
-                                    }
-                        
-                        except Exception as e:
-                            continue  # Try next image
-                            
-                except Exception as e:
-                    print(f"❌ Error accessing page {result['url']}: {str(e)}")
-                    continue
-            
-            # No images found
-            return {
-                "success": False,
-                "message": "No accessible images found in search results",
-                "original_image": image_path,
-                "search_results_checked": [r['url'] for r in search_results[:5]]
-            }
-            
-        finally:
-            browser.close()
+    except json.JSONDecodeError as e:
+        return {
+            "id": image_id,
+            "success": False,
+            "error": f"Invalid JSON in cache file: {str(e)}"
+        }
+    except Exception as e:
+        return {
+            "id": image_id,
+            "success": False,
+            "error": f"Error loading cache: {str(e)}"
+        }
 
-
-def reverse_image_search_results(image_path: str, use_cache: bool = False) -> list:
-    #TODO: this whole function is WRONG and BAD
-    # the serach results arent correct to what i see when i do it so
+def reverse_image_search(image_path: str, use_cache: bool = True) -> list:
     """
     Performs a reverse image search using Google Images and returns the first 10 results as a list of dictionaries.
     
@@ -186,15 +281,13 @@ def reverse_image_search_results(image_path: str, use_cache: bool = False) -> li
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
-    from selenium.common.exceptions import TimeoutException, NoSuchElementException
     import os
     import time
     import random
-    import requests
-    from bs4 import BeautifulSoup
-    from urllib.parse import urljoin, urlparse
     import json
     
+    image_path = os.path.join("dataset", "basic", "images", image_path)
+
     def get_cache_path(image_path: str) -> str:
         """Generate cache file path based on image path"""
         # Parse the image path: dataset/basic/images/16.jpg -> dataset/basic/reverse-image-cache/16.txt
@@ -267,7 +360,7 @@ def reverse_image_search_results(image_path: str, use_cache: bool = False) -> li
         
         # Setup Chrome options for headless browsing
         chrome_options = Options()
-        chrome_options.add_argument("--headless")
+        # chrome_options.add_argument("--headless")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-gpu")
@@ -315,43 +408,32 @@ def reverse_image_search_results(image_path: str, use_cache: bool = False) -> li
             
             results = []
             
-            # Find external links in the search results
-            # Google shows results in various containers, we'll look for links that lead to external sites
             try:
-                # Look for all clickable links that are not Google internal links
-                all_links = driver.find_elements(By.CSS_SELECTOR, "a[href]")
+                all_matches = driver.find_elements(By.CSS_SELECTOR, "div.srKDX.cvP2Ce > div")
+
+                print(f"Found {len(all_matches)} matches")
                 
-                for link in all_links:
+                for i, match in enumerate(all_matches):
                     try:
-                        url = link.get_attribute("href")
-                        title = link.text.strip()
+                        img = match.find_element(By.CSS_SELECTOR, "img[src]")
+                        title = match.find_element(By.CSS_SELECTOR, "div.T3Fozb[aria-label]").get_attribute("aria-label")
+                        url = match.find_elements(By.CSS_SELECTOR, "a[href]")[0].get_attribute("href")
                         
-                        # Filter for external links only (exclude Google internal links)
-                        if (url and title and 
-                            url.startswith("http") and 
-                            "google.com" not in url and 
-                            "googleusercontent.com" not in url and
-                            "gstatic.com" not in url and
-                            len(title) > 3 and
-                            len(title) < 200):  # Reasonable title length
+                        result = {
+                            'id': i,
+                            'title': title,
+                            'url': url,
+                            'img': img.get_attribute("src"),
+                            'is_exact_match': (i == 0)  # True only for first result
+                        }
+                        
+                        results.append(result)
+                        
+                        if len(results) >= 10:
+                            break
                             
-                            # Skip if we already have this URL
-                            if any(result['url'] == url for result in results):
-                                continue
-                                
-                            result = {
-                                'title': title,
-                                'url': url,
-                                'description': '',
-                                'source': 'Google Images Reverse Search'
-                            }
-                            
-                            results.append(result)
-                            
-                            if len(results) >= 10:
-                                break
-                                
                     except Exception as e:
+                        print(f"Error processing match: {e}")
                         continue
                         
             except Exception as e:
@@ -370,11 +452,13 @@ def reverse_image_search_results(image_path: str, use_cache: bool = False) -> li
                 with open("debug_page_source.html", "w", encoding="utf-8") as f:
                     f.write(driver.page_source)
                 print("Page source saved to debug_page_source.html")
+
+            for result in results:
+                del result['img']
             
-            return results[:10]  # Ensure we return max 10 results
+            return results[:10]
             
         finally:
-            # Always close the driver
             driver.quit()
             
     except Exception as e:
@@ -382,8 +466,8 @@ def reverse_image_search_results(image_path: str, use_cache: bool = False) -> li
         return []
     
 
-VISUAL_REVERSE_SEARCH_TOOL = {
-    "name": "visual_reverse_image_search",
+REVERSE_IMAGE_SEARCH_TOOL = {
+    "name": "reverse_image_search",
     "description": "Performs reverse image search on an image file and shows the visual results. Can help with identifying the source of an image.",
     "parameters": {
         "type": "object",
@@ -412,5 +496,43 @@ GET_EXIF_TOOL = {
     }
 }
 
+VIEW_IMAGE_FROM_REVERSE_IMAGE_SEARCH_TOOL = {
+    "name": "view_image_from_reverse_image_search",
+    "description": "Views an image from a reverse image search result.",
+    "parameters": {
+        "type": "object",
+        "properties": {"image_id": {"type": "integer", "description": "ID of the image to view (from the reverse image search results)"}}
+    }
+}
 
-TOOLS = []
+GOOGLE_SEARCH_TOOL = {
+    "name": "google_search",
+    "description": "Search the web using Google",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Search query"
+            }
+        },
+        "required": ["query"]
+    }
+}
+
+VISIT_WEBSITE_TOOL = {
+    "name": "visit_website_html",
+    "description": "Visit a website and extract its HTML content, title, and text (you cannot interact with the website, only extract information)",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "description": "The URL to visit (can include or exclude protocol)"
+            }
+        },
+        "required": ["url"]
+    }
+}
+
+TOOLS = [REVERSE_IMAGE_SEARCH_TOOL, VIEW_IMAGE_FROM_REVERSE_IMAGE_SEARCH_TOOL, GOOGLE_SEARCH_TOOL, VISIT_WEBSITE_TOOL]

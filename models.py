@@ -64,7 +64,7 @@ class BaseMultimodalModel(ABC):
 
     def _execute_function_call(self, function_name: str, function_args: dict) -> dict:
         """Execute a function call and return the result."""
-        from tools import get_exif_data, visual_reverse_image_search
+        from tools import get_exif_data, reverse_image_search, view_image_from_reverse_image_search
 
         #TODO: idk
         def convert_bytes_to_str(obj):
@@ -83,8 +83,10 @@ class BaseMultimodalModel(ABC):
         try:
             if function_name == "get_exif_data":
                 result = get_exif_data(**function_args)
-            elif function_name == "visual_reverse_image_search":
-                result = visual_reverse_image_search(**function_args)
+            elif function_name == "reverse_image_search":
+                result = reverse_image_search(**function_args)
+            elif function_name == "view_image_from_reverse_image_search":
+                result = view_image_from_reverse_image_search(**function_args)
             else:
                 return {"error": f"Unknown function: {function_name}"}
 
@@ -146,6 +148,7 @@ class BaseMultimodalModel(ABC):
                 self.response.raise_for_status()
 
                 while not self._is_model_finished(self.response.json()):
+                    print("WE ARE NOT DONE")
                     response_json = self.response.json()
                     parts = response_json['candidates'][0]['content']['parts']
                     self._handle_function_calls(parts)
