@@ -7,6 +7,10 @@ import haversine
 
 from models import Gemini2Flash
 from prompt import system_prompt
+from util import get_logger
+
+
+logger = get_logger(__name__)
 
 class Judge:
     def __init__(self):
@@ -91,7 +95,7 @@ class Judge:
 
             return self._parse_judge_response(judge_response)
         except Exception as e:
-            print(f"Error during model evaluation: {e}")
+            logger.error(f"Error during model evaluation: {e}")
             return {"correct": False, "reasoning": f"Evaluation error: {str(e)}"}
     
     def _parse_judge_response(self, response: str) -> Dict[str, Any]:
@@ -108,7 +112,7 @@ class Judge:
             elif line.startswith('REASONING:'):
                 reasoning = line.replace('REASONING:', '').strip()
         
-        print(correct, reasoning)
+        logger.evaluation("CORRECT?: " + str(correct) + " - REASONING: " + str(reasoning))
         
         return {"correct": correct, "score": 1 if correct else 0, "reasoning": reasoning}
 
@@ -123,7 +127,8 @@ class LocationParser(JudgeParser):
         lng_match = re.search(r'lng:\s*([-+]?\d+\.?\d*)', response, re.IGNORECASE)
         
         # Regex parse
-        if lat_match and lng_match:            
+        if lat_match and lng_match:
+            logger.evaluation(self.__class__.__name__ + " - Parsing coordinates.")
             lat = float(lat_match.group(1))
             lng = float(lng_match.group(1))
             
@@ -131,12 +136,12 @@ class LocationParser(JudgeParser):
                 raise ValueError(f"Invalid coordinates: lat={lat}, lng={lng}")
         # Judge parse
         else:
-            print(self.__class__.__name__ + ": Defaulting to judge parsing.")
+            logger.evaluation(self.__class__.__name__ + " - Defaulting to judge parsing.")
             try:
                 judge = Judge()
                 judge_response = judge.parse_location_response(response, task, case_id, run_folder)
             except Exception as e:
-                print(f"Judge parsing failed: {e}")
+                logger.error(f"Judge parsing failed: {e}")
                 return {'lat': None, 'lng': None}
 
             if judge_response:
@@ -184,8 +189,9 @@ def evaluate_answer(parsed_answer, task, case_id, run_folder = None) -> dict:
                 score = 0.2
             else:
                 score = 0.0
-                
-            return {
+            
+            logger.evaluation(f"Score: {score}, Correct: {score >= 0.8}, Distance: {round(distance_km, 2)} km")
+            evaluation = {
                 'score': score,
                 'correct': score >= 0.8,
                 'distance_km': distance_km
@@ -193,12 +199,12 @@ def evaluate_answer(parsed_answer, task, case_id, run_folder = None) -> dict:
     else:
         try:
             judge = Judge()
-            return judge.evaluate(parsed_answer, task, case_id, run_folder)
+            evaluation = judge.evaluate(parsed_answer, task, case_id, run_folder)
         except Exception as e:
-            print(f"Judge evaluation failed: {e}")
-            return {'score': 0.0, 'correct': False}
+            logger.error(f"Judge evaluation failed: {e}")
+            evaluation = {'score': 0.0, 'correct': False}
     
-    return {'score': 0.0, 'correct': False, 'refused': True}
+    return evaluation or {'score': 0.0, 'correct': False, 'refused': True}
 
 if __name__ == "__main__":
     import json
@@ -213,7 +219,7 @@ if __name__ == "__main__":
     # Load dataset metadata for ground truth
     metadata_path = os.path.join(args.dataset, "metadata.json")
     if not os.path.exists(metadata_path):
-        print(f"Error: Dataset metadata '{metadata_path}' not found.")
+        logger.error(f"Error: Dataset metadata '{metadata_path}' not found.")
         exit(1)
     
     with open(metadata_path, "r") as f:
@@ -233,13 +239,13 @@ if __name__ == "__main__":
     
     output_dir = os.path.join(args.response_folder, "output")
     if not os.path.isdir(output_dir):
-        print(f"Error: Output directory '{output_dir}' not found.")
+        logger.error(f"Error: Output directory '{output_dir}' not found.")
         exit(1)
 
     # Load existing detailed results to get task information
     results_path = os.path.join(args.response_folder, "results", "detailed.csv")
     if not os.path.exists(results_path):
-        print(f"Error: Results file '{results_path}' not found.")
+        logger.error(f"Error: Results file '{results_path}' not found.")
         exit(1)
     
     import pandas as pd
@@ -268,7 +274,7 @@ if __name__ == "__main__":
                     
                     # Get ground truth from task_lookup
                     if (case_id, task_id) not in task_lookup:
-                        print(f"Warning: Task {task_id} for case {case_id} not found in dataset")
+                        logger.warning(f"Warning: Task {task_id} for case {case_id} not found in dataset")
                         continue
                     
                     ground_truth = task_lookup[(case_id, task_id)]
@@ -302,13 +308,13 @@ if __name__ == "__main__":
                             "correct": evaluation.get('correct', False)
                         })
                         
-                        print(f"Case {case_id}, Task {task_id} ({task_type}): Score {evaluation.get('score', 0):.2f}, Correct: {evaluation.get('correct', False)}")
+                        logger.info(f"Case {case_id}, Task {task_id} ({task_type}): Score {evaluation.get('score', 0):.2f}, Correct: {evaluation.get('correct', False)}")
                         
                         if evaluation.get('correct', False):
                             valid_responses += 1
                             
                     except Exception as parse_error:
-                        print(f"Error parsing/evaluating case {case_id}, task {task_id}: {parse_error}")
+                        logger.error(f"Error parsing/evaluating case {case_id}, task {task_id}: {parse_error}")
                         re_evaluation_results.append({
                             "case_id": case_id,
                             "task_id": task_id,
@@ -322,7 +328,7 @@ if __name__ == "__main__":
                         })
                         
             except Exception as e:
-                print(f"Error processing {filename}: {e}")
+                logger.error(f"Error processing {filename}: {e}")
 
     # Save re-evaluation results
     re_eval_df = pd.DataFrame(re_evaluation_results)
@@ -334,7 +340,6 @@ if __name__ == "__main__":
     print(f"Total task evaluations: {len(re_evaluation_results)}")
     print(f"Correct answers: {valid_responses}")
     print(f"Overall accuracy: {valid_responses/len(re_evaluation_results)*100:.1f}%" if re_evaluation_results else "0%")
-    print(f"Results saved to: {re_eval_path}")
     
     # Show comparison with original results
     if len(re_evaluation_results) > 0:

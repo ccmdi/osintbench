@@ -1,8 +1,15 @@
+from util import get_logger
+
+logger = get_logger(__name__)
+
+
 def get_exif_data(image_path: str) -> dict:
     import piexif
     import os
 
+    #TODO: this should work for every dataset
     image_path = os.path.join("dataset", "basic", "images", image_path)
+    logger.debug(f"Extracting EXIF data from: {image_path}")
 
     try:
         exif_dict = piexif.load(image_path, True)
@@ -10,19 +17,21 @@ def get_exif_data(image_path: str) -> dict:
         if 'thumbnail' in exif_dict:
             del exif_dict['thumbnail']
 
+        logger.debug(f"Successfully extracted EXIF data with {len(exif_dict)} sections")
         return exif_dict
     except Exception as e:
         if "No EXIF data found" in str(e) or "Given file is neither JPEG nor TIFF" in str(e):
-            print(f"No EXIF data found for {image_path}")
+            logger.function_call(f"No EXIF data found for {image_path}")
             return None
         else:
-            print(f"Error extracting EXIF data: {str(e)}")
+            logger.error(f"Error extracting EXIF data from {image_path}: {str(e)}")
             return None
 
 
 #TODO: Consider computer use?
 
-def google_search(query: str, limit: int = 10) -> list:
+def google_web_search(query: str, limit: int = 10) -> list:
+    #TODO: DOES NOT WORK -- GETTING FLAGGED
     """
     Search the web using Google
     
@@ -36,8 +45,11 @@ def google_search(query: str, limit: int = 10) -> list:
     import requests
     from bs4 import BeautifulSoup
     
+    logger.debug(f"Performing Google search: '{query}' (limit: {limit})")
+    
     # Validate inputs
     if not query or not isinstance(query, str):
+        logger.error("Invalid query parameter for Google search")
         return [{"error": "Invalid query parameter"}]
     
     limit = min(max(int(limit), 1), 10)  # Clamp between 1 and 10
@@ -53,7 +65,7 @@ def google_search(query: str, limit: int = 10) -> list:
             timeout=10
         )
         response.raise_for_status()
-        
+
         # Parse results
         soup = BeautifulSoup(response.text, 'html.parser')
         results = []
@@ -89,11 +101,14 @@ def google_search(query: str, limit: int = 10) -> list:
                 'description': description
             })
         
+        logger.debug(f"Google search returned {len(results)} results")
         return results
         
     except requests.RequestException as e:
+        logger.error(f"Google search request failed: {str(e)}")
         return [{"error": f"Search request failed: {str(e)}"}]
     except Exception as e:
+        logger.error(f"Google search error: {str(e)}")
         return [{"error": f"Search error: {str(e)}"}]
 
 def visit_website_html(url: str) -> dict:
@@ -110,13 +125,17 @@ def visit_website_html(url: str) -> dict:
     from bs4 import BeautifulSoup
     from urllib.parse import urljoin, urlparse
     
+    logger.debug(f"Visiting website: {url}")
+    
     # Validate URL
     if not url or not isinstance(url, str):
+        logger.error("Invalid URL parameter for website visit")
         return {"error": "Invalid URL parameter"}
     
     # Add protocol if missing
     if not url.startswith(('http://', 'https://')):
         url = 'https://' + url
+        logger.debug(f"Added protocol, final URL: {url}")
     
     try:
         # Fetch the webpage
@@ -155,8 +174,9 @@ def visit_website_html(url: str) -> dict:
         # Limit content length to avoid huge responses
         if len(clean_text) > 8000:
             clean_text = clean_text[:8000] + "... [content truncated]"
+            logger.debug(f"Content truncated to 8000 characters")
         
-        return {
+        result = {
             "url": response.url,  # Final URL after redirects
             "title": title,
             "description": description,
@@ -166,9 +186,14 @@ def visit_website_html(url: str) -> dict:
             "content_length": len(clean_text)
         }
         
+        logger.debug(f"Successfully visited website: {title} ({len(clean_text)} chars)")
+        return result
+        
     except requests.RequestException as e:
+        logger.error(f"Failed to fetch website {url}: {str(e)}")
         return {"error": f"Failed to fetch website: {str(e)}"}
     except Exception as e:
+        logger.error(f"Error processing website {url}: {str(e)}")
         return {"error": f"Error processing website: {str(e)}"}
 
 def overpass_turbo_query(query: str) -> dict:
@@ -186,13 +211,16 @@ def view_image_from_reverse_image_search(image_id: int) -> dict:
     from PIL import Image
     import io
 
+    #TODO: this should work for every dataset
     cache_path = os.path.join("dataset", "basic", "reverse-image-cache", "16.txt")
+    logger.debug(f"Viewing image {image_id} from reverse search cache: {cache_path}")
 
     try:
         with open(cache_path, "r") as f:
             data = json.load(f)
 
             if image_id >= len(data):
+                logger.warning(f"Image ID {image_id} not found in cache (max: {len(data)-1})")
                 return {
                     "id": image_id,
                     "success": False,
@@ -212,7 +240,9 @@ def view_image_from_reverse_image_search(image_id: int) -> dict:
                     if format_type == 'JPG':
                         format_type = 'JPEG'
                     actual_b64 = match.group(2)
+                    logger.debug(f"Extracted {format_type} image from data URL")
                 else:
+                    logger.error("Invalid data URL format in cached image")
                     return {
                         "id": image_id,
                         "success": False,
@@ -222,12 +252,14 @@ def view_image_from_reverse_image_search(image_id: int) -> dict:
                 # Assume it's just raw base64 data
                 actual_b64 = img_b64
                 format_type = image_data.get('format', 'JPEG').upper()
+                logger.debug(f"Using raw base64 data, format: {format_type}")
 
             # Validate base64 and get image info
             try:
                 img_bytes = base64.b64decode(actual_b64)
                 img = Image.open(io.BytesIO(img_bytes))
                 
+                logger.debug(f"Successfully decoded image: {img.size} {format_type}")
                 return {
                     "id": image_id,
                     "success": True,
@@ -240,6 +272,7 @@ def view_image_from_reverse_image_search(image_id: int) -> dict:
                     }
                 }
             except Exception as decode_error:
+                logger.error(f"Failed to decode base64 image {image_id}: {str(decode_error)}")
                 return {
                     "id": image_id,
                     "success": False,
@@ -247,18 +280,21 @@ def view_image_from_reverse_image_search(image_id: int) -> dict:
                 }
 
     except FileNotFoundError:
+        logger.error(f"Cache file not found: {cache_path}")
         return {
             "id": image_id,
             "success": False,
             "error": f"Cache file not found: {cache_path}"
         }
     except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON in cache file {cache_path}: {str(e)}")
         return {
             "id": image_id,
             "success": False,
             "error": f"Invalid JSON in cache file: {str(e)}"
         }
     except Exception as e:
+        logger.error(f"Error loading cache for image {image_id}: {str(e)}")
         return {
             "id": image_id,
             "success": False,
@@ -286,7 +322,9 @@ def reverse_image_search(image_path: str, use_cache: bool = True) -> list:
     import random
     import json
     
+    #TODO: this should work for every dataset
     image_path = os.path.join("dataset", "basic", "images", image_path)
+    logger.function_call(f"Starting reverse image search for: {image_path}")
 
     def get_cache_path(image_path: str) -> str:
         """Generate cache file path based on image path"""
@@ -319,10 +357,10 @@ def reverse_image_search(image_path: str, use_cache: bool = True) -> list:
             if os.path.exists(cache_path):
                 with open(cache_path, 'r', encoding='utf-8') as f:
                     cached_data = json.load(f)
-                    print(f"✓ Loaded {len(cached_data)} results from cache: {cache_path}")
+                    logger.function_call(f"Loaded {len(cached_data)} results from cache: {cache_path}")
                     return cached_data
         except Exception as e:
-            print(f"Warning: Could not load cache from {cache_path}: {e}")
+            logger.warning(f"Could not load cache from {cache_path}: {e}")
         return None
     
     def save_cache(cache_path: str, results: list):
@@ -336,14 +374,14 @@ def reverse_image_search(image_path: str, use_cache: bool = True) -> list:
             with open(cache_path, 'w', encoding='utf-8') as f:
                 json.dump(results, f, indent=2, ensure_ascii=False)
             
-            print(f"✓ Saved {len(results)} results to cache: {cache_path}")
+            logger.function_call(f"Saved {len(results)} results to cache: {cache_path}")
             
         except Exception as e:
-            print(f"Warning: Could not save cache to {cache_path}: {e}")
+            logger.warning(f"Could not save cache to {cache_path}: {e}")
     
     # Check if image file exists
     if not os.path.exists(image_path):
-        print(f"Error: Image file not found at {image_path}")
+        logger.error(f"Image file not found at {image_path}")
         return []
     
     # Get cache path and check for cached results
@@ -352,15 +390,25 @@ def reverse_image_search(image_path: str, use_cache: bool = True) -> list:
     if use_cache:
         cached_results = load_cache(cache_path)
         if cached_results:
-            return cached_results
-    
+            logger.debug("Processing cached results...")
+            # Create new list without 'img' fields instead of deleting
+            clean_results = []
+            for i, result in enumerate(cached_results):
+                logger.debug(f"Processing cached result {i+1}/{len(cached_results)}")
+                clean_result = {k: v for k, v in result.items() if k != 'img'}
+                clean_results.append(clean_result)
+            
+            logger.debug("Finished processing cached results")
+            time.sleep(5)
+            return clean_results
+        
     try:
         # Get absolute path for the image
         image_path_abs = os.path.abspath(image_path)
-        
-        # Setup Chrome options for headless browsing
+        logger.debug(f"Using absolute path: {image_path_abs}")
+
         chrome_options = Options()
-        # chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--headless")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-gpu")
@@ -377,19 +425,22 @@ def reverse_image_search(image_path: str, use_cache: bool = True) -> list:
         wait = WebDriverWait(driver, 15)
         
         try:
-            print(f"🔍 Performing reverse image search for: {image_path}")
+            logger.function_call(f"Performing reverse image search for: {image_path}")
             
             # Navigate to Google Images
             driver.get("https://images.google.com")
             
             # Add random delay to appear more human-like
-            time.sleep(random.uniform(1, 3))
+            delay = random.uniform(1, 3)
+            logger.debug(f"Waiting {delay:.1f}s before interacting with page")
+            time.sleep(delay)
             
             # Find and click the camera icon for reverse image search
             camera_button = wait.until(
                 EC.element_to_be_clickable((By.CSS_SELECTOR, "[aria-label='Search by image']"))
             )
             camera_button.click()
+            logger.debug("Clicked camera button for reverse search")
             
             time.sleep(random.uniform(0.5, 1.5))
             
@@ -400,18 +451,21 @@ def reverse_image_search(image_path: str, use_cache: bool = True) -> list:
             
             # Upload the image file
             file_input.send_keys(image_path_abs)
+            logger.debug("Uploaded image file")
             
             # Wait for the results page to load
-            time.sleep(random.uniform(4, 6))
+            load_delay = random.uniform(4, 6)
+            logger.debug(f"Waiting {load_delay:.1f}s for results to load")
+            time.sleep(load_delay)
             
-            print("Current URL:", driver.current_url)
+            logger.debug(f"Current URL: {driver.current_url}")
             
             results = []
             
             try:
                 all_matches = driver.find_elements(By.CSS_SELECTOR, "div.srKDX.cvP2Ce > div")
 
-                print(f"Found {len(all_matches)} matches")
+                logger.debug(f"Found {len(all_matches)} matches on results page")
                 
                 for i, match in enumerate(all_matches):
                     try:
@@ -428,30 +482,29 @@ def reverse_image_search(image_path: str, use_cache: bool = True) -> list:
                         }
                         
                         results.append(result)
+                        logger.debug(f"Processed result {i+1}: {title[:50]}...")
                         
                         if len(results) >= 10:
                             break
                             
                     except Exception as e:
-                        print(f"Error processing match: {e}")
+                        logger.warning(f"Error processing match {i}: {e}")
                         continue
                         
             except Exception as e:
-                print(f"Error finding search results: {e}")
+                logger.error(f"Error finding search results: {e}")
             
-            # Debug: Print what we found
-            print(f"Found {len(results)} results")
+            logger.function_call(f"Found {len(results)} reverse image search results")
             for i, result in enumerate(results[:3]):
-                print(f"Result {i+1}: {result['title'][:50]}... -> {result['url'][:50]}...")
+                logger.debug(f"Result {i+1}: {result['title'][:50]}... -> {result['url'][:50]}...")
             
             # Save results to cache
             if results:
                 save_cache(cache_path, results)
             else:
-                print("No results found. Saving page source for debugging...")
-                with open("debug_page_source.html", "w", encoding="utf-8") as f:
-                    f.write(driver.page_source)
-                print("Page source saved to debug_page_source.html")
+                logger.warning("No results found.")
+                # with open("debug_page_source.html", "w", encoding="utf-8") as f:
+                #     f.write(driver.page_source)
 
             for result in results:
                 del result['img']
@@ -460,9 +513,10 @@ def reverse_image_search(image_path: str, use_cache: bool = True) -> list:
             
         finally:
             driver.quit()
+            logger.debug("Closed Chrome driver")
             
     except Exception as e:
-        print(f"Error performing reverse image search: {str(e)}")
+        logger.error(f"Error performing reverse image search: {str(e)}")
         return []
     
 
@@ -505,8 +559,8 @@ VIEW_IMAGE_FROM_REVERSE_IMAGE_SEARCH_TOOL = {
     }
 }
 
-GOOGLE_SEARCH_TOOL = {
-    "name": "google_search",
+GOOGLE_WEB_SEARCH_TOOL = {
+    "name": "google_web_search",
     "description": "Search the web using Google",
     "parameters": {
         "type": "object",
@@ -535,4 +589,4 @@ VISIT_WEBSITE_TOOL = {
     }
 }
 
-TOOLS = [REVERSE_IMAGE_SEARCH_TOOL, VIEW_IMAGE_FROM_REVERSE_IMAGE_SEARCH_TOOL, GOOGLE_SEARCH_TOOL, VISIT_WEBSITE_TOOL]
+TOOLS = [REVERSE_IMAGE_SEARCH_TOOL, GET_EXIF_TOOL, VIEW_IMAGE_FROM_REVERSE_IMAGE_SEARCH_TOOL, VISIT_WEBSITE_TOOL]

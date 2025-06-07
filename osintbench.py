@@ -8,11 +8,13 @@ import argparse
 from dotenv import load_dotenv
 
 from scripts.eval import evaluate_answer, get_parser
-
 from models import *
 from prompt import get_prompt
+from util import setup_logging, get_logger
 
 load_dotenv()
+
+logger = get_logger(__name__)
 
 @dataclass
 class Task:
@@ -49,6 +51,7 @@ class Case:
             info=data['info'],
             tasks=[Task.from_dict(task) for task in data['tasks']]
         )
+
 @dataclass
 class BenchmarkResult:
     case_obj: Case
@@ -100,7 +103,7 @@ class OsintBenchmark:
             cases.append(Case.from_dict(case, self.dataset_path))
         return cases
 
-    def run(self, args) -> Dict:
+    def run(self, args, run_folder: str) -> Dict:
         """Runs the benchmark. Returns `_compile_results` output."""
         cases_to_test = self.cases
 
@@ -111,29 +114,35 @@ class OsintBenchmark:
         elif args.samples and args.samples < len(self.cases):
             import random
             cases_to_test = random.sample(self.cases, args.samples)
+            logger.info(f"Testing random sample of {args.samples} cases out of {len(self.cases)}")
+        else:
+            logger.info(f"Testing all {len(self.cases)} cases")
                 
         self.results = []
         
-        for case in cases_to_test:
-            print(f"Testing case: {case.case_id}")
-            self._evaluate_case(case)
-            
+        for i, case in enumerate(cases_to_test, 1):
+            logger.announcement(f"Testing case {i}/{len(cases_to_test)}")
+            self._evaluate_case(case, run_folder)
             self.save_results(run_folder + "/results/")
         
+        logger.info("All cases completed, compiling results")
         return self._compile_results()
     
-    def _evaluate_case(self, case: Case) -> None:
+    def _evaluate_case(self, case: Case, run_folder: str) -> None:
         """Evaluates a case."""
         for attempt in range(self.max_retries):
             try:
+                logger.debug(f"Querying model for case {case.case_id} (attempt {attempt+1})")
                 response = self.model.query(get_prompt(case), case, run_folder)
                 
                 os.makedirs(f"{run_folder}/output/", exist_ok=True)
                 with open(f"{run_folder}/output/{case.case_id}.txt", "w", encoding="utf-8") as f:
                     f.write(response)
+                logger.debug(f"Saved response for case {case.case_id} to output file")
                 
                 try:
                     for task in case.tasks:
+                        logger.debug(f"Processing task {task.task_id} ({task.type}) for case {case.case_id}")
                         parser = get_parser(task.type)
                         answer = parser.parse(response, task, case.case_id, run_folder)
                         evaluation = evaluate_answer(answer, task, case.case_id, run_folder)
@@ -151,14 +160,15 @@ class OsintBenchmark:
                         self.results.append(result)
                         
                         if result.refused:
-                            print(f"REFUSED: {result.error_message}")
+                            logger.warning(f"Task {task.task_id} refused: {result.error_message}")
                         else:
-                            print(f"SUCCESS: {result.parsed_answer}")
+                            logger.debug(f"Task {task.task_id} completed successfully")
                     
+                    logger.info(f"Case {case.case_id} completed successfully")
                     return  # Success - all tasks processed
                     
                 except ValueError as parse_error:
-                    print(f"  Format error (attempt {attempt+1}): {str(parse_error)}")
+                    logger.warning(f"Parse error for case {case.case_id} (attempt {attempt+1}): {str(parse_error)}")
                     if "missing required fields" in str(parse_error) or "parse" in str(parse_error):
                         # Add error result for each task in the case
                         for task in case.tasks:
@@ -173,16 +183,18 @@ class OsintBenchmark:
                                 error_message=f"Format error: {str(parse_error)}"
                             )
                             self.results.append(error_result)
+                        logger.error(f"Case {case.case_id} failed with parse error (no retry)")
                         return  # Don't retry for format errors
                 
             except Exception as e:
                 error_msg = str(e)
-                print(f"  API/network error (attempt {attempt+1}): {error_msg}")
+                logger.warning(f"API/network error for case {case.case_id} (attempt {attempt+1}): {error_msg}")
                 if attempt < self.max_retries - 1:
-                    print(f"  Retrying...")
+                    logger.info(f"Retrying case {case.case_id}...")
                     continue
                 
                 # Final attempt failed - add error result for each task
+                logger.error(f"Case {case.case_id} failed after {self.max_retries} attempts")
                 for task in case.tasks:
                     error_result = BenchmarkResult(
                         case_obj=case, 
@@ -197,7 +209,7 @@ class OsintBenchmark:
                     self.results.append(error_result)
                 return
     
-    def _compile_results(self) -> Dict:
+    def _compile_results(self) -> Dict:        
         total = len(self.results)
         refusals = sum(1 for r in self.results if r.refused)
         
@@ -222,7 +234,7 @@ class OsintBenchmark:
         temporal_score = sum(r.evaluation.get('score', 0) for r in self.results if not r.refused and r.evaluation and r.task_type == 'temporal')
         analysis_score = sum(r.evaluation.get('score', 0) for r in self.results if not r.refused and r.evaluation and r.task_type == 'analysis')
         
-        return {
+        results_dict = {
             "model": self.model.name,
             "test": os.path.basename(self.dataset_path),
             "n": len(set(r.case_obj.case_id for r in self.results)),
@@ -236,8 +248,19 @@ class OsintBenchmark:
             "task_accuracy": correct_tasks / valid_tasks if valid_tasks > 0 else 0,
             "detailed_results": self.results
         }
+        
+        # logger.info("Results compilation summary:")
+        # logger.info(f"  Total samples: {results_dict['n']}")
+        # logger.info(f"  Total tasks: {results_dict['total_tasks']}")
+        # logger.info(f"  Valid tasks: {valid_tasks}")
+        # logger.info(f"  Refusals: {refusals}")
+        # logger.info(f"  Overall accuracy: {results_dict['overall_accuracy']:.3f}")
+        
+        return results_dict
     
     def save_results(self, output_path: str):
+        logger.debug(f"Saving results to: {output_path}")
+        
         results_dict = self._compile_results()
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         
@@ -271,6 +294,9 @@ if __name__ == "__main__":
     parser.add_argument("--model", "-m", type=str, help="Model to use")
     parser.add_argument("--max-retries", type=int, default=3,
                         help="Maximum number of retries for API/network errors (default: 3)")
+    parser.add_argument("--log-level", type=str, default="INFO", 
+                        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+                        help="Logging level (default: INFO)")
     args = parser.parse_args()
     
     dataset_path = f"dataset/{args.dataset}"
@@ -284,7 +310,13 @@ if __name__ == "__main__":
     runtime = datetime.datetime.now().strftime('%Y-%m-%dT%H_%M_%S')
     run_folder = f"responses/{benchmark.model.name}_{args.dataset}_{runtime}"
     
-    results = benchmark.run(args)
+    log_file = setup_logging(run_folder, args.log_level)
+    
+    logger.announcement(f"Starting OSINT Benchmark - Model: {benchmark.model.name}, Dataset: {args.dataset}")
+    logger.info(f"Run folder: {run_folder}")
+    logger.info(f"Log file: {log_file}")
+    
+    results = benchmark.run(args, run_folder)
     
     benchmark.save_results(run_folder + "/results/")
     
@@ -297,3 +329,5 @@ if __name__ == "__main__":
     print(f"Analysis accuracy: {results['analysis_accuracy']:.3f}")
     print(f"Overall accuracy: {results['overall_accuracy']:.3f}")
     print(f"Task accuracy: {results['task_accuracy']:.3f}")
+    
+    logger.info("OSINT Benchmark completed successfully")
