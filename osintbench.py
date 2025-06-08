@@ -246,15 +246,9 @@ class OsintBenchmark:
             "analysis_accuracy": analysis_score / analysis_tasks if analysis_tasks > 0 else 0,
             "overall_accuracy": total_score / valid_tasks if valid_tasks > 0 else 0,
             "task_accuracy": correct_tasks / valid_tasks if valid_tasks > 0 else 0,
+            "tools": self.model.get_tools(),
             "detailed_results": self.results
         }
-        
-        # logger.info("Results compilation summary:")
-        # logger.info(f"  Total samples: {results_dict['n']}")
-        # logger.info(f"  Total tasks: {results_dict['total_tasks']}")
-        # logger.info(f"  Valid tasks: {valid_tasks}")
-        # logger.info(f"  Refusals: {refusals}")
-        # logger.info(f"  Overall accuracy: {results_dict['overall_accuracy']:.3f}")
         
         return results_dict
     

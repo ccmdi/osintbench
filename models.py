@@ -65,6 +65,10 @@ class BaseMultimodalModel(ABC):
         """Get the API endpoint URL."""
         return self.base_url
 
+    def get_tools(self) -> List[str]:
+        """Get the tools for the model."""
+        return [tool.get('name') for tool in self.tools]
+
     def _execute_function_call(self, function_name: str, function_args: dict) -> dict:
         """Execute a function call and return the result."""
         logger.debug(f"Executing function call: {function_name}")
@@ -107,37 +111,56 @@ class BaseMultimodalModel(ABC):
         """Extract text from the API response."""
         pass
 
-    def save_json(self, response: requests.Response, run_folder: str, case) -> None:
+    
+    def save_json(self, response, run_folder: str, case, name = None) -> None:
         if run_folder and case.case_id:
             logger.debug(f"Saving JSON response for case {case.case_id} to {run_folder}/json/")
             os.makedirs(f"{run_folder}/json/", exist_ok=True)
-            with open(f"{run_folder}/json/{case.case_id}.json", "w", encoding="utf-8") as f:
-                f.write(response.text)
+            
+            if name:
+                name = f"{name}_{case.case_id}"
+            else:
+                name = case.case_id
+
+            i = 0
+            while os.path.exists(f"{run_folder}/json/{name}_{i}.json"):
+                i += 1
+
+            with open(f"{run_folder}/json/{name}_{i}.json", "w", encoding="utf-8") as f:
+                import json
+                if isinstance(response, requests.Response):
+                    try:
+                        # Parse and reformat the JSON for pretty printing
+                        response_json = response.json()
+                        json.dump(response_json, f, indent=2, ensure_ascii=False)
+                    except (json.JSONDecodeError, ValueError):
+                        # Fallback to raw text if not valid JSON
+                        logger.warning(f"Response is not valid JSON, saving as text")
+                        f.write(response.text)
+                elif isinstance(response, (dict, list)):
+                    # Already a Python object, format it nicely
+                    json.dump(response, f, indent=2, ensure_ascii=False)
+                elif isinstance(response, str):
+                    try:
+                        # Try to parse string as JSON
+                        parsed = json.loads(response)
+                        json.dump(parsed, f, indent=2, ensure_ascii=False)
+                    except json.JSONDecodeError:
+                        # Not JSON, save as-is
+                        f.write(response)
+                else:
+                    # Convert to string and try to parse as JSON
+                    response_str = str(response)
+                    try:
+                        parsed = json.loads(response_str)
+                        json.dump(parsed, f, indent=2, ensure_ascii=False)
+                    except json.JSONDecodeError:
+                        f.write(response_str)
 
     #TODO
     def _is_model_finished(self, response_json: dict) -> bool:
-        """The model is finished when it returns STOP with NO function calls."""
-        try:
-            candidate = response_json['candidates'][0]
-            parts = candidate['content']['parts']
-            finish_reason = candidate.get('finishReason', '')
-            
-            has_function_calls = any('functionCall' in part for part in parts)
-            
-            # Only finished if STOP with no function calls
-            if finish_reason == 'STOP':
-                is_finished = not has_function_calls
-                logger.debug(f"Model finish check: reason={finish_reason}, has_function_calls={has_function_calls}, finished={is_finished}")
-                return is_finished
-            
-            # Other finish reasons indicate completion
-            is_finished = finish_reason in ['MAX_TOKENS', 'SAFETY', 'RECITATION']
-            logger.debug(f"Model finish check: reason={finish_reason}, finished={is_finished}")
-            return is_finished
-            
-        except (KeyError, IndexError, TypeError) as e:
-            logger.warning(f"Error checking if model is finished: {e}, assuming finished")
-            return True
+        logger.warning(f"Model finish check not implemented for {self.__class__.__bases__[0].__name__}")
+        return True
 
     def query(self, prompt: str, case = None, run_folder: str = None) -> str:
         """
@@ -169,14 +192,16 @@ class BaseMultimodalModel(ABC):
                 while not self._is_model_finished(self.response.json()):
                     logger.debug("Model has not finished, continuing conversation with function calls")
                     response_json = self.response.json()
+                    self.save_json(self.payload, run_folder, case, "payload")
+                    self.save_json(self.response, run_folder, case)
                     self._handle_function_calls(response_json)
-                
-                self.save_json()
 
                 if run_folder and case.case_id:
-                    #TODO: just temporary checking to make sure the conversation is continuing
+                    #FINAL
+                    self.save_json(self.payload, run_folder, case, "payload")
                     self.save_json(self.response, run_folder, case)
                     logger.debug(f"Saved response JSON for case {case.case_id}")
+
                     with open(f"payload.json", "w", encoding="utf-8") as f:
                         import json
                         f.write(json.dumps(self.payload, indent=4))
@@ -332,7 +357,7 @@ class AnthropicClient(BaseMultimodalModel):
             elif part.get('type') == 'text':
                 text_parts.append(part['text'])
             elif part.get('type') == 'thinking':
-                thinking_parts.append(part)  # Keep the full thinking block
+                thinking_parts.append(part)
 
         # If there are function calls, execute them and continue the conversation
         if function_calls:
@@ -359,7 +384,7 @@ class AnthropicClient(BaseMultimodalModel):
             
             # Add model's function call response to the existing payload
             self.payload["messages"].append({
-                "content": assistant_content,  # ✅ Thinking blocks + tool_use blocks
+                "content": assistant_content,
                 "role": "assistant"
             })
             
@@ -449,6 +474,10 @@ class GoogleClient(BaseMultimodalModel):
         action = "generateContent"
         version_path = getattr(self, 'api_version_path', '')
         return f"{self.base_url}/{version_path}/models/{self.model_identifier}:{action}?key={self.api_key}"
+
+    def get_tools(self) -> List[str]:
+        """Get the tools for the model."""
+        return [tool.get('name') for tool in self.tools.get('function_declarations', [])]
 
     def _build_headers(self) -> dict:
         return {"Content-Type": "application/json"}

@@ -1,5 +1,9 @@
 from util import get_logger
 
+import requests
+from googlesearch import search
+import trafilatura
+
 logger = get_logger(__name__)
 
 
@@ -27,178 +31,161 @@ def get_exif_data(image_path: str) -> dict:
             logger.error(f"Error extracting EXIF data from {image_path}: {str(e)}")
             return None
 
-
-#TODO: Consider computer use?
-
 def google_web_search(query: str, limit: int = 10) -> list:
-    #TODO: DOES NOT WORK -- GETTING FLAGGED
-    """
-    Search the web using Google
-    
-    Args:
-        query: Search query string
-        limit: Maximum number of results to return (default: 5, max: 10)
-    
-    Returns:
-        List of search results with title, url, and description
-    """
     import requests
     from bs4 import BeautifulSoup
+    from googlesearch import search
     
-    logger.debug(f"Performing Google search: '{query}' (limit: {limit})")
+    try:
+        results = []
+        for i, url in enumerate(search(query, num_results=limit, sleep_interval=1)):
+            title = f"Result {i+1}"  # Fallback
+
+            try:
+                response = requests.get(url, timeout=5, headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                })
+                soup = BeautifulSoup(response.text, 'html.parser')
+                title_tag = soup.find('title')
+                if title_tag:
+                    title = title_tag.get_text().strip()[:200]  # Limit length
+            except:
+                pass  # Keep fallback title
+            
+            results.append({
+                'title': title,
+                'url': url,
+                'description': ''
+            })
+        return results
+    except Exception as e:
+        return [{"error": str(e)}]
+
+def visit_website(url: str) -> dict:
+    try:
+        response = requests.get(url, timeout=15)
+        response.raise_for_status()
+        
+        # Extract main content
+        content = trafilatura.extract(response.text, include_comments=False)
+        title = trafilatura.extract_metadata(response.text).title if trafilatura.extract_metadata(response.text) else "No title"
+        
+        if not content:
+            content = "Could not extract main content"
+        
+        return {
+            "url": response.url,
+            "title": title,
+            "description": "",
+            "content": content[:8000] + ("... [truncated]" if len(content) > 8000 else ""),
+            "status_code": response.status_code,
+            "content_type": response.headers.get('content-type', ''),
+            "content_length": len(content)
+        }
+    except Exception as e:
+        return {"error": f"Failed to process website: {str(e)}"}
+
+def overpass_turbo_query(query: str, timeout: int = 60) -> dict:
+    """
+    Execute an Overpass QL query against OpenStreetMap data
+    
+    Args:
+        query: Overpass QL query string
+        timeout: Query timeout in seconds (default: 25)
+    
+    Returns:
+        Dictionary with query results or error information
+    """
+    import requests
+    import json
+    
+    logger.debug(f"Executing Overpass query: {query}...")
     
     # Validate inputs
     if not query or not isinstance(query, str):
-        logger.error("Invalid query parameter for Google search")
-        return [{"error": "Invalid query parameter"}]
+        logger.error("Invalid query parameter for Overpass")
+        return {"error": "Invalid query parameter"}
     
-    limit = min(max(int(limit), 1), 10)  # Clamp between 1 and 10
+    # Overpass API endpoint
+    overpass_url = "http://overpass-api.de/api/interpreter"
     
-    try:
-        # Perform Google search
-        response = requests.get(
-            'https://www.google.com/search',
-            params={'q': query},
-            headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            },
-            timeout=10
-        )
-        response.raise_for_status()
-
-        # Parse results
-        soup = BeautifulSoup(response.text, 'html.parser')
-        results = []
-        
-        # Find search result containers
-        search_containers = soup.find_all('div', class_='g')
-        
-        for i, container in enumerate(search_containers):
-            if i >= limit:
-                break
-                
-            # Extract title
-            title_elem = container.find('h3')
-            if not title_elem:
-                continue
-                
-            # Extract link
-            link_elem = container.find('a')
-            if not link_elem or not link_elem.get('href'):
-                continue
-                
-            url = link_elem.get('href')
-            if not url.startswith('http'):
-                continue
-                
-            # Extract snippet/description
-            snippet_elem = container.find(class_='VwiC3b')
-            description = snippet_elem.get_text() if snippet_elem else ''
-            
-            results.append({
-                'title': title_elem.get_text(),
-                'url': url,
-                'description': description
-            })
-        
-        logger.debug(f"Google search returned {len(results)} results")
-        return results
-        
-    except requests.RequestException as e:
-        logger.error(f"Google search request failed: {str(e)}")
-        return [{"error": f"Search request failed: {str(e)}"}]
-    except Exception as e:
-        logger.error(f"Google search error: {str(e)}")
-        return [{"error": f"Search error: {str(e)}"}]
-
-def visit_website_html(url: str) -> dict:
-    """
-    Visit a website and return its HTML content and metadata
-    
-    Args:
-        url: The URL to visit
-    
-    Returns:
-        Dictionary with url, title, content, and metadata
-    """
-    import requests
-    from bs4 import BeautifulSoup
-    from urllib.parse import urljoin, urlparse
-    
-    logger.debug(f"Visiting website: {url}")
-    
-    # Validate URL
-    if not url or not isinstance(url, str):
-        logger.error("Invalid URL parameter for website visit")
-        return {"error": "Invalid URL parameter"}
-    
-    # Add protocol if missing
-    if not url.startswith(('http://', 'https://')):
-        url = 'https://' + url
-        logger.debug(f"Added protocol, final URL: {url}")
+    # Add timeout to query if not already present
+    if not query.strip().startswith('['):
+        query = f"[out:json][timeout:{timeout}];\n{query}"
+    elif 'timeout:' not in query:
+        # Insert timeout into existing settings
+        query = query.replace('[out:json]', f'[out:json][timeout:{timeout}]')
     
     try:
-        # Fetch the webpage
-        response = requests.get(
-            url,
+        # Make the request
+        response = requests.post(
+            overpass_url,
+            data=query,
             headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                'Content-Type': 'text/plain; charset=utf-8',
+                'User-Agent': 'OSINTbench'
             },
-            timeout=15,
-            allow_redirects=True
+            timeout=timeout + 5  # Add buffer to request timeout
         )
         response.raise_for_status()
         
-        # Parse the HTML
-        soup = BeautifulSoup(response.text, 'html.parser')
+        # Parse JSON response
+        result_data = response.json()
         
-        # Extract title
-        title_elem = soup.find('title')
-        title = title_elem.get_text().strip() if title_elem else 'No title'
+        # Extract elements if present
+        elements = result_data.get('elements', [])
         
-        # Extract meta description
-        meta_desc = soup.find('meta', attrs={'name': 'description'})
-        description = meta_desc.get('content', '').strip() if meta_desc else ''
-        
-        # Remove script and style elements
-        for script in soup(["script", "style"]):
-            script.decompose()
-        
-        # Get text content (cleaned)
-        text_content = soup.get_text()
-        # Clean up whitespace
-        lines = (line.strip() for line in text_content.splitlines())
-        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-        clean_text = ' '.join(chunk for chunk in chunks if chunk)
-        
-        # Limit content length to avoid huge responses
-        if len(clean_text) > 8000:
-            clean_text = clean_text[:8000] + "... [content truncated]"
-            logger.debug(f"Content truncated to 8000 characters")
-        
-        result = {
-            "url": response.url,  # Final URL after redirects
-            "title": title,
-            "description": description,
-            "content": clean_text,
-            "status_code": response.status_code,
-            "content_type": response.headers.get('content-type', ''),
-            "content_length": len(clean_text)
+        # Process and summarize results
+        summary = {
+            "total_elements": len(elements),
+            "element_types": {},
+            "has_coordinates": 0,
+            "has_tags": 0
         }
         
-        logger.debug(f"Successfully visited website: {title} ({len(clean_text)} chars)")
+        # Analyze elements
+        for element in elements:
+            elem_type = element.get('type', 'unknown')
+            summary["element_types"][elem_type] = summary["element_types"].get(elem_type, 0) + 1
+            
+            if 'lat' in element and 'lon' in element:
+                summary["has_coordinates"] += 1
+            
+            if element.get('tags'):
+                summary["has_tags"] += 1
+        
+        # Limit response size for large datasets
+        if len(elements) > 100:
+            logger.debug(f"Large result set ({len(elements)} elements), truncating to first 100")
+            elements = elements[:100]
+            summary["truncated"] = True
+            summary["original_count"] = len(result_data.get('elements', []))
+        
+        result = {
+            "success": True,
+            "query": query,
+            "summary": summary,
+            "elements": elements,
+            "generator": result_data.get('generator', 'unknown'),
+            "osm3s": result_data.get('osm3s', {})
+        }
+        
+        logger.debug(f"Overpass query successful: {summary['total_elements']} elements found")
         return result
         
-    except requests.RequestException as e:
-        logger.error(f"Failed to fetch website {url}: {str(e)}")
-        return {"error": f"Failed to fetch website: {str(e)}"}
+    except requests.exceptions.Timeout:
+        logger.error(f"Overpass query timed out after {timeout}s")
+        return {"error": f"Query timed out after {timeout} seconds"}
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Overpass request failed: {str(e)}")
+        return {"error": f"Request failed: {str(e)}"}
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON response from Overpass: {str(e)}")
+        return {"error": f"Invalid JSON response: {str(e)}"}
     except Exception as e:
-        logger.error(f"Error processing website {url}: {str(e)}")
-        return {"error": f"Error processing website: {str(e)}"}
+        logger.error(f"Overpass query error: {str(e)}")
+        return {"error": f"Query error: {str(e)}"}
 
-def overpass_turbo_query(query: str) -> dict:
-    #TODO
-    pass
 
 def sv_query(query: str):
     pass
@@ -399,7 +386,6 @@ def reverse_image_search(image_path: str, use_cache: bool = True) -> list:
                 clean_results.append(clean_result)
             
             logger.debug("Finished processing cached results")
-            time.sleep(5)
             return clean_results
         
     try:
@@ -575,8 +561,8 @@ GOOGLE_WEB_SEARCH_TOOL = {
 }
 
 VISIT_WEBSITE_TOOL = {
-    "name": "visit_website_html",
-    "description": "Visit a website and extract its HTML content, title, and text (you cannot interact with the website, only extract information)",
+    "name": "visit_website",
+    "description": "Visit a website and read it's title and full content (you cannot interact with the website, only extract information)",
     "parameters": {
         "type": "object",
         "properties": {
@@ -589,4 +575,26 @@ VISIT_WEBSITE_TOOL = {
     }
 }
 
-TOOLS = [REVERSE_IMAGE_SEARCH_TOOL, GET_EXIF_TOOL, VIEW_IMAGE_FROM_REVERSE_IMAGE_SEARCH_TOOL, VISIT_WEBSITE_TOOL]
+OVERPASS_TURBO_TOOL = {
+    "name": "overpass_turbo_query",
+    "description": "Execute Overpass QL queries to search OpenStreetMap data. Useful for finding geographic features, POIs, buildings, roads, etc. around specific locations or matching certain criteria.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Overpass QL query string. Examples: '(node[\"amenity\"=\"restaurant\"](around:1000,40.7128,-74.0060);); out;' or 'way[\"highway\"=\"primary\"][\"name\"~\"Broadway\"];out geom;'"
+            }
+        },
+        "required": ["query"]
+    }
+}
+
+TOOLS = [
+    REVERSE_IMAGE_SEARCH_TOOL,
+    VIEW_IMAGE_FROM_REVERSE_IMAGE_SEARCH_TOOL,
+    GET_EXIF_TOOL,
+    GOOGLE_WEB_SEARCH_TOOL,
+    VISIT_WEBSITE_TOOL,
+    OVERPASS_TURBO_TOOL
+]
