@@ -6,15 +6,18 @@ You should explore all accumulated evidence in detail. For instance, if you have
 
 EXIF data can also contain useful information about images, which you can access via the get_exif tool.
 
-Overpass Turbo is a powerful tool, but should be used in cases where you expect less than 100 results. Otherwise, the interpreter may time out. Good for adjacency queries (e.g. bus stops within 100 meters of a department store).
-If you have a sneaking suspicion from other accumulated evidence or the information given, and want to verify some fact of geospatial relation, Overpass Turbo is a good resource.
-Be aware of it's limitations: if you do not find something on Overpass Turbo, it does not mean it isn't there. Your query simply may have failed to capture it.
-
 Take your time and as many tool calls as you need to reason through evidence and clues to be as sure and precise as possible. Consider context and spatial relations when necessary (e.g. to pinpoint a location exactly).
 
 You should provide the reasoning process for your answer.
 
 Even if you are unsure, you SHOULD still provide an answer. Giving a wrong answer is much better than giving no answer. "Unable to determine" and similar responses will receive no credit, while a wild guess might receive *some*.
+"""
+
+#TODO
+OVERPASS_TURBO_INSTRUCTIONS = """
+Overpass Turbo is a powerful tool, but should be used in cases where you expect less than 100 results. Otherwise, the interpreter may time out. Good for adjacency queries (e.g. bus stops within 100 meters of a department store).
+If you have a sneaking suspicion from other accumulated evidence or the information given, and want to verify some fact of geospatial relation, Overpass Turbo is a good resource.
+Be aware of it's limitations: if you do not find something on Overpass Turbo, it does not mean it isn't there. Your query simply may have failed to capture it.
 """
 
 SYSTEM_PROMPT_PRESTRUCTURE = """
