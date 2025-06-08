@@ -1,32 +1,82 @@
-GeoBench is a benchmark for evaluating how well large language models can geolocate images, through the context of GeoGuessr. This project tests whether models can generalize beyond their primary training modalities to perform spatial reasoning tasks.
+OSINTbench is a benchmark for evaluating how well large language models can perform open-source intelligence (OSINT) tasks. Categories include:
+* **Geolocation**: Spatial reasoning
+* **Identification**: Information synthesis, breadth of knowledge
+* **Temporal**: Temporal reasoning
+* **Analysis**: General reasoning
 
-# **[Leaderboard](https://geobench.org)**
-
-![](img/leaderboard.png)
-For an in-depth explanation of the results, covering things like model behavior and reasoning, see my [writeup](https://ccmdi.github.io/blog/GeoBench).
+# **[Leaderboard](https://osintbench.org)**
 
 # Installation
-```
-git clone https://github.com/ccmdi/geobench.git
-cd geobench
+```cmd
+git clone https://github.com/ccmdi/osintbench.git
+cd osintbench
 pip install -r requirements.txt
 ```
 
-Setup your `.env` based on `SAMPLE.env` for whichever model providers you wish to test for (e.g. `ANTHROPIC_API_KEY` must be set to test Claude). Instructions for setting up `NCFA` can be found [here](https://github.com/EvickaStudio/GeoGuessr-API?tab=readme-ov-file#authentication).
+Setup your `.env` based on `SAMPLE.env` for whichever model providers you wish to test for (e.g. `ANTHROPIC_API_KEY` must be set to test Claude).
 
-## Create a dataset
+**You will need to manually create a dataset for this to work**. Datasets follow this schema:
+```json
+"cases": [
+    {
+      "id": <case_number>,
+      "images": [
+        "images/<image_number>.<ext>"
+      ],
+      "info": "<context given to the model about the case>",
+      "tasks": [
+        {
+          "id": 1,
+          "type": "location",
+          "prompt": "Find the exact location of the photo.",
+          "answer": {
+            "lat": <true_lat>,
+            "lng": <true_lng>
+          }
+        },
+        {
+            "id": 2,
+            "type": "identification",
+            "prompt": "Who is this?",
+            "answer": "<person_name>"
+        }
+      ]
+    },
+    ...
 ```
-python dataset.py --num <n> --output <test name> --map <geoguessr map id>
+
+The folder for a dataset should be in the structure:
 ```
+dataset/
+├─ basic/
+│  ├─ metadata.json
+│  ├─ images/
+│  │  ├─ 2.jpg
+│  │  ├─ 1.png
+├─ advanced/
+│  ├─ metadata.json
+```
+Where your dataset definition lives in `metadata.json`.
 
 ## Test a model
+> [!CAUTION]
+> Most outputs are evaluated by a judge model. Double-check responses before finalizing results.
+
 ```
-python geobench.py --dataset <test name> --model <model name>
+python osintbench.py --dataset <test name> --model <model name>
 ```
 
-Models go by their class name in `models.py`. Claude 3.5 Haiku goes by `Claude3_5Haiku`, for instance.
+Models go by their class name in `models.py`. Gemini 2.5 Flash goes by `Gemini2_5Flash`, for instance.
 
-## Compare guesses
-Running the `browser/main.py` script and opening `visualization.html` can show you all guesses for a location made by the models.
-
-![](img/visualization.png)
+# Roadmap
+- [x] **Tool use**
+    - [x] Google Search
+    - [x] EXIF extraction
+    - [x] Reverse image search (Google Lens)
+    - [x] Visit website
+    - [x] Overpass turbo
+    - [ ] Google Street View
+- [ ] **High quality, human-verified datasets**
+- [ ] Video support
+- [ ] Recursive prompting/self-evaluation
+- [ ] Release
