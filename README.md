@@ -69,7 +69,13 @@ python osintbench.py --dataset <test name> --model <model name>
 Models go by their class name in `models.py`. Gemini 2.5 Flash goes by `Gemini2_5Flash`, for instance.
 
 # Roadmap
-- [x] **Better tool use**: EXIF extraction, reverse image search, etc.
+- [x] **Tool use**
+    - [x] Google Search
+    - [x] EXIF extraction
+    - [x] Reverse image search (Google Lens)
+    - [x] Visit website
+    - [x] Overpass turbo
+    - [ ] Google Street View
 - [ ] **High quality, human-verified datasets**
 - [ ] Video support
 - [ ] Recursive prompting/self-evaluation
