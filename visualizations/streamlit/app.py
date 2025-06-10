@@ -107,6 +107,42 @@ def load_model_response(run_path, case_id):
             return f"Error loading response: {e}"
     return None
 
+# Function to load judge response for a case
+def load_judge_response(run_path, case_id):
+    judge_file = os.path.join(run_path, "judge", f"{case_id}.txt")
+    if os.path.exists(judge_file):
+        try:
+            with open(judge_file, "r", encoding="utf-8") as f:
+                return f.read()
+        except Exception as e:
+            return f"Error loading judge response: {e}"
+    return None
+
+# Function to load scores from detailed.csv
+def load_detailed_scores(run_path):
+    csv_file = os.path.join(run_path, "results", "detailed.csv")
+    if os.path.exists(csv_file):
+        try:
+            df = pd.read_csv(csv_file)
+            return df
+        except Exception as e:
+            return None
+    return None
+
+# Function to get score for specific case and task
+def get_case_task_score(scores_df, case_id, task_id):
+    if scores_df is None:
+        return None
+    
+    # The CSV uses case_id and task_id columns
+    if 'case_id' in scores_df.columns and 'task_id' in scores_df.columns and 'score' in scores_df.columns:
+        # Filter by case_id and task_id
+        matching_rows = scores_df[(scores_df['case_id'] == case_id) & (scores_df['task_id'] == task_id)]
+        if not matching_rows.empty:
+            return matching_rows.iloc[0]['score']
+    
+    return None
+
 # Function to parse location from model response
 def parse_location_from_response(response_text):
     """Try to extract lat/lng coordinates from model response"""
@@ -238,10 +274,14 @@ if selected_dataset_name:
                 case_data = get_case_by_id(metadata, selected_case_id)
 
                 if case_data:
-                    # Load model response if a run is selected
+                    # Load model response, judge response, and scores if a run is selected
                     model_response = None
+                    judge_response = None
+                    scores_df = None
                     if selected_run:
                         model_response = load_model_response(selected_run['path'], selected_case_id)
+                        judge_response = load_judge_response(selected_run['path'], selected_case_id)
+                        scores_df = load_detailed_scores(selected_run['path'])
                     
                     # Main area to display images and JSON
                     col1, spacer, col2 = st.columns([2, 0.15, 2])
@@ -275,13 +315,37 @@ if selected_dataset_name:
                                 st.text_area("Raw Response", model_response, height=200)
                             st.markdown("---")
 
+                        # Show judge response if available
+                        if judge_response:
+                            st.subheader("⚖️ Judge Response")
+                            with st.expander(f"Judge evaluation for {selected_run['display_name']}", expanded=False):
+                                st.text_area("Judge Response", judge_response, height=200)
+                            st.markdown("---")
+
                         if case_data.get("tasks"):
                             for i, task in enumerate(case_data["tasks"]):
+                                task_id = task.get("id")  # Get the actual task ID
                                 st.markdown(f"### Task {i+1}")
                                 if task.get("type"):
                                     st.markdown(f"**Type:** {task['type']}")
                                 if task.get("prompt"):
                                     st.markdown(f"**Prompt:** {task['prompt']}")
+                                
+                                # Show score if available
+                                if scores_df is not None and task_id is not None:
+                                    score = get_case_task_score(scores_df, selected_case_id, task_id)
+                                    if score is not None:
+                                        # Color code the score
+                                        if isinstance(score, (int, float)):
+                                            if score >= 0.8:
+                                                st.success(f"**Score:** {score}")
+                                            elif score >= 0.5:
+                                                st.warning(f"**Score:** {score}")
+                                            else:
+                                                st.error(f"**Score:** {score}")
+                                        else:
+                                            st.markdown(f"**Score:** {score}")
+                                
                                 if task.get("answer") is not None:
                                     st.markdown("**Ground Truth Answer:**")
                                     if isinstance(task["answer"], dict):
