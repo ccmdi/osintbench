@@ -2,10 +2,12 @@ from models.base import BaseMultimodalModel, logger
 from typing import List, Tuple
 import requests
 
+
+#TODO
 class OpenRouterClient(BaseMultimodalModel):
     api_key_name = "OPENROUTER_API_KEY"
     base_url = "https://openrouter.ai/api/v1/chat/completions"
-    referer_url: str = "https://geobench.org"
+    referer_url: str = "https://osintbench.org"
 
     def _build_headers(self) -> dict:
         return {

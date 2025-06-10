@@ -1,16 +1,28 @@
 SYSTEM_PROMPT_BASE = """
 You are participating in an OSINT challenge. You are given task(s) for case that you must provide answers to using the provided evidence and any tools you have available.
-Tools like reverse image search and web search are OFTEN required to find the correct answers to tasks. You may need to look at multiple sources, like news articles, social media pages, online images, metaanalyses, etc. Browsing the Internet via available tools is a critical part of the challenge.
+"""
 
-You should explore all accumulated evidence in detail. For instance, if you have positive reverse image search results, you might want to compare the image to the original to see if they are the same. For web search, you might want to choose one or more of the search results and visit them to see if they are relevant to the case.
+TOOLS_BASE = """
+Tools like reverse image search and web search are frequently required to find the correct answers to tasks. You may need to look at multiple sources, like news articles, social media pages, online images, metaanalyses, etc. Browsing the Internet via available tools is a critical part of the challenge.
+"""
+
+BASIC_TOOLS_INSTRUCTIONS = """
+For instance, if you have positive reverse image search results from reverse_image_search tool, you might want to compare the image to the original to see if they are the same. Often, reverse image search results will not be the *EXACT* same image, so it's important to verify results with the view_image_from_reverse_image_search tool and make visual sense of the results. NEVER take reverse image search results at face value if you have not looked at the images yourself.
+Upon viewing the image(s) from reverse_image_search tool, if they don't appear to be what you would expect (e.g. the images are visually STRIKINGLY different in terms of spatial orientation), you should not use them as evidence or consider them in the context of your existing thoughts.
+Despite all this, reverse image search is a powerful tool and should be used as often as possible.
+
+For web search, you might want to choose one or more of the search results and visit them to see if they are relevant to the case.
+
+You should ALWAYS begin your responses with your intuition, and then follow up with your plan, followed by your research using tools. This can be lengthy and detailed as your initial plan will dramatically shape your outcome. ALWAYS start by stating what your initial guess might be, before using any tools.
+If you have a strong initial "vibe", you can also choose to follow your intuition instead of reverse image search or web search, as they could lead you astray. Balancing the intuition with your evidence is a part of the challenge.
 
 EXIF data can also contain useful information about images, which you can access via the get_exif tool.
 
+You can also use the geocode tool to get the coordinates of a location or verify information about a location, generally.
+
+Finally, you can use the street view tool to get a visual confirmation of a location. A successful query of street view is only useful if you compare the resulting image to the real image, and perform basic spatial and visual analysis to determine if they match (in location tasks, for instance).
+
 Take your time and as many tool calls as you need to reason through evidence and clues to be as sure and precise as possible. Consider context and spatial relations when necessary (e.g. to pinpoint a location exactly).
-
-You should provide the reasoning process for your answer.
-
-Even if you are unsure, you SHOULD still provide an answer. Giving a wrong answer is much better than giving no answer. "Unable to determine" and similar responses will receive no credit, while a wild guess might receive *some*.
 """
 
 #TODO
@@ -21,6 +33,12 @@ Be aware of it's limitations: if you do not find something on Overpass Turbo, it
 """
 
 SYSTEM_PROMPT_PRESTRUCTURE = """
+You should explore all accumulated evidence in detail.
+
+You should provide the reasoning process for your answer.
+
+Even if you are unsure, you SHOULD still provide an answer. Giving a wrong answer is much better than giving no answer. "Unable to determine" and similar responses will receive no credit, while a wild guess might receive *some*.
+
 Your final answer after your reasoning MUST be in structured format:
 """
 
@@ -34,11 +52,6 @@ lat: [latitude as decimal number with as much precision as possible]
 lng: [longitude as decimal number with as much precision as possible]
 
 Within 50 meters is a perfect answer — you should focus your efforts on getting as absolutely close as possible if you know where it is.
-"""
-
-LOCATION_TASK_BETA = """
-FOR LOCATION TASKS (island, city, region, etc.):
-name: [name of the location]
 """
 
 IDENTIFICATION_TASK_FORMAT = """
@@ -59,6 +72,7 @@ conclusion: [conclusion to a question - must be ONE answer, no hedging (you cann
 """
 
 import os
+from context import get_benchmark
 
 def format_case_info(case) -> str:
     """Format case information as a text string."""
@@ -77,7 +91,14 @@ def format_case_tasks(case) -> list[str]:
 
 def get_prompt(case) -> str:
     """Builds prompt for a case."""
+    benchmark = get_benchmark()
+    model_has_tools = len(benchmark.model.get_tools()) > 0
+
     prompt_parts = [SYSTEM_PROMPT_BASE, format_case_info(case)]
+    if model_has_tools:
+        prompt_parts.append(TOOLS_BASE)
+        prompt_parts.append(BASIC_TOOLS_INSTRUCTIONS)
+
     prompt_parts.extend(format_case_tasks(case))
     prompt_parts.append(SYSTEM_PROMPT_PRESTRUCTURE)
     
@@ -93,11 +114,5 @@ def get_prompt(case) -> str:
         prompt_parts.append(ANALYSIS_TASK_FORMAT)
     
     prompt_parts.append(SYSTEM_PROMPT_POSTSTRUCTURE)
-
-    with open("prompt.txt", "w", encoding="utf-8") as f:
-        f.write(system_prompt("\n".join(prompt_parts)))
     
-    return system_prompt("\n".join(prompt_parts))
-
-def system_prompt(prompt_string: str) -> str:
-    return "<system>" + prompt_string + "</system>"
+    return "\n".join(prompt_parts)

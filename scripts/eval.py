@@ -6,7 +6,6 @@ from typing import Dict, Any
 import haversine
 
 from models import Gemini2Flash
-from prompt import system_prompt
 from util import get_logger
 
 
@@ -14,7 +13,7 @@ logger = get_logger(__name__)
 
 class Judge:
     def __init__(self):
-        """Initialize the judge with a small, fast model"""
+        """Initialize the judge."""
         self.model_class = Gemini2Flash
         self.api_key = os.getenv(self.model_class.api_key_name)
         self.model = self.model_class(self.api_key)
@@ -39,7 +38,7 @@ class Judge:
 
         Response to parse: {response}
         """
-            judge_response = self.model.query(system_prompt(judge_parse_prompt))
+            judge_response = self.model.query(judge_parse_prompt)
 
             if run_folder:
                 os.makedirs(f"{run_folder}/judge", exist_ok=True)
@@ -52,12 +51,13 @@ class Judge:
     
     def evaluate(self, response: str, task, case_id, run_folder = None) -> Dict[str, Any]:
         """
-        Evaluate a response against the task and ground truth using a language model
+        Evaluate a response against the task answer with the judge.
         
         Args:
             response: The model's response to evaluate
             task: The original task
-            ground_truth: Dictionary containing the correct answer
+            case_id: The case ID
+            run_folder: The folder to save the judge's response
             
         Returns:
             Dictionary with 'correct' (bool) and 'reasoning' (str)
@@ -86,11 +86,11 @@ class Judge:
         REASONING: Brief explanation of why it's correct or incorrect"""
 
         try:
-            judge_response = self.model.query(system_prompt(judge_eval_prompt))
+            judge_response = self.model.query(judge_eval_prompt)
             
             if run_folder:
                 os.makedirs(f"{run_folder}/judge", exist_ok=True)
-                with open(f"{run_folder}/judge/{case_id}_{task.task_id}.txt", "w") as f:
+                with open(f"{run_folder}/judge/{case_id}_{task.task_id}.txt", "w", encoding="utf-8") as f:
                     f.write(judge_response)
 
             return self._parse_judge_response(judge_response)

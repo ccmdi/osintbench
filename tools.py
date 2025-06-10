@@ -1,18 +1,19 @@
 from util import get_logger
+from context import get_dataset_path
 
 import requests
-from googlesearch import search
 import trafilatura
+import piexif
+import haversine
+
+import base64
+import os
+import io
 
 logger = get_logger(__name__)
 
-
 def get_exif_data(image_path: str) -> dict:
-    import piexif
-    import os
-
-    #TODO: this should work for every dataset
-    image_path = os.path.join("dataset", "basic", "images", image_path)
+    image_path = os.path.join(get_dataset_path(), "images", image_path)
     logger.debug(f"Extracting EXIF data from: {image_path}")
 
     try:
@@ -186,35 +187,225 @@ def overpass_turbo_query(query: str, timeout: int = 60) -> dict:
         logger.error(f"Overpass query error: {str(e)}")
         return {"error": f"Query error: {str(e)}"}
 
-
-def sv_query(query: str):
-    pass
-
-def view_image_from_reverse_image_search(image_id: int) -> dict:
-    import os 
+def geocode(query: str, limit: int = 5) -> dict:
+    """
+    Geocode a location using OpenStreetMap's Nominatim service
+    
+    Args:
+        query: Location to search for (e.g., "Niagara Falls", "123 Main St, Toronto")
+        limit: Maximum number of results to return (default: 5)
+    
+    Returns:
+        Dictionary with geocoding results or error information
+    """
+    import requests
     import json
-    import base64
+    
+    logger.debug(f"Geocoding query: {query} (limit: {limit})")
+    
+    # Validate inputs
+    if not query or not isinstance(query, str):
+        logger.error("Invalid query parameter for Nominatim")
+        return {"error": "Invalid query parameter"}
+    
+    if limit < 1 or limit > 50:
+        limit = 5
+        logger.warning("Limit adjusted to 5 (valid range: 1-50)")
+    
+    # Nominatim API endpoint
+    nominatim_url = "https://nominatim.openstreetmap.org/search"
+    
+    # Request parameters
+    params = {
+        'q': query,
+        'format': 'json',
+        'limit': limit,
+        'addressdetails': 1,
+        'extratags': 1,
+        'namedetails': 1
+    }
+    
+    # Headers to identify the request
+    headers = {
+        'User-Agent': 'OSINTbench/1.0',
+        'Accept': 'application/json'
+    }
+    
+    try:
+        # Make the request
+        response = requests.get(
+            nominatim_url,
+            params=params,
+            headers=headers,
+            timeout=10
+        )
+        response.raise_for_status()
+        
+        # Parse JSON response
+        results = response.json()
+        
+        # Process results
+        processed_results = []
+        for i, result in enumerate(results):
+            processed_result = {
+                "place_id": result.get("place_id"),
+                "display_name": result.get("display_name"),
+                "latitude": float(result.get("lat", 0)),
+                "longitude": float(result.get("lon", 0)),
+                "importance": result.get("importance", 0),
+                "place_rank": result.get("place_rank"),
+                "category": result.get("category"),
+                "type": result.get("type"),
+                "address": result.get("address", {}),
+                "boundingbox": result.get("boundingbox", []),
+                "extratags": result.get("extratags", {}),
+                "namedetails": result.get("namedetails", {})
+            }
+            processed_results.append(processed_result)
+        
+        # Create summary
+        summary = {
+            "query": query,
+            "total_results": len(results),
+            "countries": list(set(r.get("address", {}).get("country") for r in results if r.get("address", {}).get("country"))),
+            "types": list(set(r.get("type") for r in results if r.get("type"))),
+            "categories": list(set(r.get("category") for r in results if r.get("category")))
+        }
+        
+        result_dict = {
+            "success": True,
+            "summary": summary,
+            "results": processed_results
+        }
+        
+        logger.debug(f"Nominatim geocoding successful: {len(results)} results for '{query}'")
+        return result_dict
+        
+    except requests.exceptions.Timeout:
+        logger.error("Nominatim request timed out")
+        return {"error": "Request timed out after 10 seconds"}
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Nominatim request failed: {str(e)}")
+        return {"error": f"Request failed: {str(e)}"}
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON response from Nominatim: {str(e)}")
+        return {"error": f"Invalid JSON response: {str(e)}"}
+    except Exception as e:
+        logger.error(f"Nominatim geocoding error: {str(e)}")
+        return {"error": f"Geocoding error: {str(e)}"}
+
+def sv_query(lat: float, lng: float, zoom: int = 4) -> dict:
+    """
+    Get Street View panorama image for given coordinates
+    
+    Args:
+        lat (float): Latitude coordinate
+        lng (float): Longitude coordinate  
+        zoom (int): Zoom level (0-5, higher = more detail, default: 4)
+        
+    Returns:
+        dict: Dictionary containing success status and base64 image data
+    """
+    from streetview import search_panoramas, get_panorama
+    from PIL import Image
+    
+    logger.function_call(f"Getting Street View panorama for coordinates: {lat}, {lng}")
+    
+    try:
+        panoramas = search_panoramas(lat, lng)
+        
+        if not panoramas:
+            logger.error(f"No Street View panoramas found at coordinates: {lat}, {lng}")
+            return {
+                "success": False,
+                "error": f"No Street View imagery available at coordinates: {lat}, {lng}",
+                "coordinates": {"lat": lat, "lng": lng}
+            }
+        
+        first = panoramas[-1]
+        distance_from_input = haversine.haversine((lat, lng), (first.lat, first.lon))
+        
+        zoom = max(0, min(5, zoom))
+        
+        panorama = get_panorama(first.pano_id, zoom=zoom, multi_threaded=True)
+        original_size = panorama.size
+        
+        # Downscale to reasonable size for LLM context usage
+        # Street View panoramas are typically 2:1 ratio, so use 1024x512 max
+        MAX_WIDTH = 2048
+        MAX_HEIGHT = 1024
+        
+        if panorama.size[0] > MAX_WIDTH or panorama.size[1] > MAX_HEIGHT:
+            # Calculate scale factor to fit within bounds while maintaining aspect ratio
+            width_scale = MAX_WIDTH / panorama.size[0]
+            height_scale = MAX_HEIGHT / panorama.size[1]
+            scale_factor = min(width_scale, height_scale)
+            
+            new_width = int(panorama.size[0] * scale_factor)
+            new_height = int(panorama.size[1] * scale_factor)
+            
+            panorama = panorama.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            logger.debug(f"Resized panorama from {original_size} to {panorama.size} (scale: {scale_factor:.3f})")
+        
+        # Save full resolution version for reference
+        save_path = os.path.join(get_dataset_path(), "street_view_cache", f"panorama_{lat}_{lng}_z{zoom}.jpg")
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        
+        # Save the original full-res version
+        full_panorama = get_panorama(first.pano_id, zoom=zoom, multi_threaded=True)
+        full_panorama.save(save_path, format='JPEG', quality=85, optimize=True)
+        
+        panorama.save('panorama.jpg', quality=40, optimize=True)
+        
+        # Process the downscaled version for base64
+        img_buffer = io.BytesIO()
+        panorama.save(img_buffer, format='JPEG', quality=40, optimize=True)  # Lower quality for smaller size
+        img_buffer.seek(0)
+        
+        # Check final size and estimate tokens
+        img_size = len(img_buffer.getvalue())
+        estimated_tokens = (img_size * 4/3) * 0.75  # base64 expansion * token ratio
+        
+        # Encode to base64
+        img_base64 = base64.b64encode(img_buffer.getvalue()).decode('utf-8')
+        
+        result = {
+            "success": True,
+            "image_data": img_base64,
+            "coordinates": {"lat": first.lat, "lng": first.lon},
+            "distance_from_input": str(distance_from_input) + " km"
+        }
+        
+        logger.function_call(f"Successfully retrieved Street View panorama: {panorama.size[0]}x{panorama.size[1]} pixels (~{estimated_tokens:,.0f} tokens)")
+        return result
+    except Exception as e:
+        logger.error(f"Error retrieving Street View panorama: {str(e)}")
+        return {
+            "success": False,
+            "error": f"Error retrieving Street View panorama: {str(e)}"
+        }
+
+def view_image_from_reverse_image_search(case_image_id: int, result_image_id: int) -> dict:
+    import json
     import re
     from PIL import Image
-    import io
 
-    #TODO: this should work for every dataset
-    cache_path = os.path.join("dataset", "basic", "reverse-image-cache", "16.txt")
-    logger.debug(f"Viewing image {image_id} from reverse search cache: {cache_path}")
+    cache_path = os.path.join(get_dataset_path(), "reverse-image-cache", f"{case_image_id}.txt")
+    logger.debug(f"Viewing image {result_image_id} from reverse search cache: {cache_path}")
 
     try:
-        with open(cache_path, "r") as f:
+        with open(cache_path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-            if image_id >= len(data):
-                logger.warning(f"Image ID {image_id} not found in cache (max: {len(data)-1})")
+            if result_image_id >= len(data):
+                logger.warning(f"Image ID {result_image_id} not found in cache (max: {len(data)-1})")
                 return {
-                    "id": image_id,
+                    "id": result_image_id,
                     "success": False,
-                    "error": f"Image ID {image_id} not found. Available IDs: 0-{len(data)-1}"
+                    "error": f"Image ID {result_image_id} not found. Available IDs: 0-{len(data)-1}"
                 }
 
-            image_data = data[image_id]
+            image_data = data[result_image_id]
             img_b64 = image_data['img']
             
             # Handle different base64 formats
@@ -231,7 +422,7 @@ def view_image_from_reverse_image_search(image_id: int) -> dict:
                 else:
                     logger.error("Invalid data URL format in cached image")
                     return {
-                        "id": image_id,
+                        "id": result_image_id,
                         "success": False,
                         "error": "Invalid data URL format"
                     }
@@ -248,7 +439,7 @@ def view_image_from_reverse_image_search(image_id: int) -> dict:
                 
                 logger.debug(f"Successfully decoded image: {img.size} {format_type}")
                 return {
-                    "id": image_id,
+                    "id": result_image_id,
                     "success": True,
                     "found_image": actual_b64,  # Return clean base64 without data URL prefix
                     "image_info": {
@@ -259,9 +450,9 @@ def view_image_from_reverse_image_search(image_id: int) -> dict:
                     }
                 }
             except Exception as decode_error:
-                logger.error(f"Failed to decode base64 image {image_id}: {str(decode_error)}")
+                logger.error(f"Failed to decode base64 image {result_image_id}: {str(decode_error)}")
                 return {
-                    "id": image_id,
+                    "id": result_image_id,
                     "success": False,
                     "error": f"Failed to decode base64 image: {str(decode_error)}"
                 }
@@ -269,21 +460,21 @@ def view_image_from_reverse_image_search(image_id: int) -> dict:
     except FileNotFoundError:
         logger.error(f"Cache file not found: {cache_path}")
         return {
-            "id": image_id,
+            "id": result_image_id,
             "success": False,
             "error": f"Cache file not found: {cache_path}"
         }
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON in cache file {cache_path}: {str(e)}")
         return {
-            "id": image_id,
+            "id": result_image_id,
             "success": False,
             "error": f"Invalid JSON in cache file: {str(e)}"
         }
     except Exception as e:
-        logger.error(f"Error loading cache for image {image_id}: {str(e)}")
+        logger.error(f"Error loading cache for image {result_image_id}: {str(e)}")
         return {
-            "id": image_id,
+            "id": result_image_id,
             "success": False,
             "error": f"Error loading cache: {str(e)}"
         }
@@ -304,18 +495,15 @@ def reverse_image_search(image_path: str, use_cache: bool = True) -> list:
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
-    import os
     import time
     import random
     import json
-    
-    #TODO: this should work for every dataset
-    image_path = os.path.join("dataset", "basic", "images", image_path)
+
+    image_path = os.path.join(get_dataset_path(), "images", image_path)
     logger.function_call(f"Starting reverse image search for: {image_path}")
 
     def get_cache_path(image_path: str) -> str:
         """Generate cache file path based on image path"""
-        # Parse the image path: dataset/basic/images/16.jpg -> dataset/basic/reverse-image-cache/16.txt
         path_parts = image_path.replace('\\', '/').split('/')
         
         if len(path_parts) >= 3 and path_parts[-2] == 'images':
@@ -541,7 +729,11 @@ VIEW_IMAGE_FROM_REVERSE_IMAGE_SEARCH_TOOL = {
     "description": "Views an image from a reverse image search result.",
     "parameters": {
         "type": "object",
-        "properties": {"image_id": {"type": "integer", "description": "ID of the image to view (from the reverse image search results)"}}
+        "properties": {
+            "case_image_id": {"type": "integer", "description": "ID of the image in the case (from the case metadata)"},
+            "result_image_id": {"type": "integer", "description": "ID of the image to view (from the reverse image search results)"}
+        },
+        "required": ["case_image_id", "result_image_id"]
     }
 }
 
@@ -590,10 +782,53 @@ OVERPASS_TURBO_TOOL = {
     }
 }
 
-TOOLS = [
+GEOCODE_TOOL = {
+    "name": "geocode",
+    "description": "Geocode a location name or address using OpenStreetMap's Nominatim service. Converts location names to coordinates and detailed address information.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Location to search for (e.g., 'Niagara Falls', '123 Main St, Toronto', 'Eiffel Tower')"
+            }
+        },
+        "required": ["query"]
+    }
+}
+
+SV_QUERY_TOOL = {
+    "name": "sv_query",
+    "description": "Get Google Street View panorama image for specific coordinates (within 50 meter radius). Very useful for visual confirmation.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "lat": {
+                "type": "number",
+                "description": "Latitude coordinate (e.g., 40.7128)"
+            },
+            "lng": {
+                "type": "number", 
+                "description": "Longitude coordinate (e.g., -74.0060)"
+            }
+        },
+        "required": ["lat", "lng"]
+    }
+}
+
+TOOLS_BASIC = [
     REVERSE_IMAGE_SEARCH_TOOL,
-    VIEW_IMAGE_FROM_REVERSE_IMAGE_SEARCH_TOOL,
     GET_EXIF_TOOL,
     GOOGLE_WEB_SEARCH_TOOL,
-    VISIT_WEBSITE_TOOL
+    VISIT_WEBSITE_TOOL,
+    GEOCODE_TOOL
+]
+
+TOOLS_BASIC_FULL = TOOLS_BASIC + [
+    VIEW_IMAGE_FROM_REVERSE_IMAGE_SEARCH_TOOL,
+    SV_QUERY_TOOL
+]
+
+TOOLS_ADVANCED = TOOLS_BASIC_FULL + [
+    OVERPASS_TURBO_TOOL
 ]
