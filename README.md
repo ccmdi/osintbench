@@ -82,5 +82,5 @@ Models go by their class name in `models.py`. Gemini 2.5 Flash goes by `Gemini2_
 - [ ] Recursive prompting/self-evaluation
 - [ ] Release
 
->[!INFO]
+> [!INFO]
 > Contributors are welcome! Check the roadmap.
