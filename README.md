@@ -75,8 +75,12 @@ Models go by their class name in `models.py`. Gemini 2.5 Flash goes by `Gemini2_
     - [x] Reverse image search (Google Lens)
     - [x] Visit website
     - [x] Overpass turbo
-    - [ ] Google Street View
+    - [x] Google Street View
 - [ ] **High quality, human-verified datasets**
-- [ ] Video support
+- [ ] Higher prompt quality to improve performance
+- [ ] Video support?
 - [ ] Recursive prompting/self-evaluation
 - [ ] Release
+
+>[!INFO]
+> Contributors are welcome! Check the roadmap.
