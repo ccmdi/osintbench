@@ -13,7 +13,7 @@ logger = get_logger(__name__)
 
 class Judge:
     def __init__(self):
-        """Initialize the judge with a small, fast model"""
+        """Initialize the judge."""
         self.model_class = Gemini2Flash
         self.api_key = os.getenv(self.model_class.api_key_name)
         self.model = self.model_class(self.api_key)
@@ -51,12 +51,13 @@ class Judge:
     
     def evaluate(self, response: str, task, case_id, run_folder = None) -> Dict[str, Any]:
         """
-        Evaluate a response against the task and ground truth using a language model
+        Evaluate a response against the task answer with the judge.
         
         Args:
             response: The model's response to evaluate
             task: The original task
-            ground_truth: Dictionary containing the correct answer
+            case_id: The case ID
+            run_folder: The folder to save the judge's response
             
         Returns:
             Dictionary with 'correct' (bool) and 'reasoning' (str)

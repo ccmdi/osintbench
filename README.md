@@ -7,7 +7,7 @@ OSINTbench is a benchmark for evaluating how well large language models can perf
 # **[Leaderboard](https://osintbench.org)**
 
 # Installation
-```cmd
+```bash
 git clone https://github.com/ccmdi/osintbench.git
 cd osintbench
 pip install -r requirements.txt

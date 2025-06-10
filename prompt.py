@@ -1,11 +1,5 @@
 SYSTEM_PROMPT_BASE = """
 You are participating in an OSINT challenge. You are given task(s) for case that you must provide answers to using the provided evidence and any tools you have available.
-
-You should explore all accumulated evidence in detail.
-
-You should provide the reasoning process for your answer.
-
-Even if you are unsure, you SHOULD still provide an answer. Giving a wrong answer is much better than giving no answer. "Unable to determine" and similar responses will receive no credit, while a wild guess might receive *some*.
 """
 
 TOOLS_BASE = """
@@ -39,6 +33,12 @@ Be aware of it's limitations: if you do not find something on Overpass Turbo, it
 """
 
 SYSTEM_PROMPT_PRESTRUCTURE = """
+You should explore all accumulated evidence in detail.
+
+You should provide the reasoning process for your answer.
+
+Even if you are unsure, you SHOULD still provide an answer. Giving a wrong answer is much better than giving no answer. "Unable to determine" and similar responses will receive no credit, while a wild guess might receive *some*.
+
 Your final answer after your reasoning MUST be in structured format:
 """
 
@@ -52,11 +52,6 @@ lat: [latitude as decimal number with as much precision as possible]
 lng: [longitude as decimal number with as much precision as possible]
 
 Within 50 meters is a perfect answer — you should focus your efforts on getting as absolutely close as possible if you know where it is.
-"""
-
-LOCATION_TASK_BETA = """
-FOR LOCATION TASKS (island, city, region, etc.):
-name: [name of the location]
 """
 
 IDENTIFICATION_TASK_FORMAT = """
@@ -77,6 +72,7 @@ conclusion: [conclusion to a question - must be ONE answer, no hedging (you cann
 """
 
 import os
+from context import get_benchmark
 
 def format_case_info(case) -> str:
     """Format case information as a text string."""
@@ -95,7 +91,14 @@ def format_case_tasks(case) -> list[str]:
 
 def get_prompt(case) -> str:
     """Builds prompt for a case."""
+    benchmark = get_benchmark()
+    model_has_tools = len(benchmark.model.get_tools()) > 0
+
     prompt_parts = [SYSTEM_PROMPT_BASE, format_case_info(case)]
+    if model_has_tools:
+        prompt_parts.append(TOOLS_BASE)
+        prompt_parts.append(BASIC_TOOLS_INSTRUCTIONS)
+
     prompt_parts.extend(format_case_tasks(case))
     prompt_parts.append(SYSTEM_PROMPT_PRESTRUCTURE)
     
