@@ -13,3 +13,9 @@ def set_dataset_path(dataset_path):
 
 def get_dataset_path():
     return getattr(_context, 'dataset_path', None)
+
+def set_benchmark(benchmark):
+    _context.benchmark = benchmark
+
+def get_benchmark():
+    return getattr(_context, 'benchmark', None)

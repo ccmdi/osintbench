@@ -5,10 +5,20 @@ import requests
 class OpenAIClient(BaseMultimodalModel):
     api_key_name = "OPENAI_API_KEY"
     base_url = "https://api.openai.com/v1/responses"
+    provider = "OpenAI"
 
     reasoning_effort: str = None
     detail: str = None
     tools: List = None
+
+    def get_token_usage(self, response: requests.Response) -> dict:
+        """Get the token usage for a response."""
+        #TODO
+        response_json = response.json()
+        return {
+            "input_tokens": response_json.get("usage", {}).get("input_tokens", 0),
+            "output_tokens": response_json.get("usage", {}).get("output_tokens", 0)
+        }
 
     def _build_payload(self, text_content: List[str], encoded_images: List[Tuple[str, str]] = None) -> dict:
         logger.debug(f"Building OpenAI payload with {len(text_content)} text items and {len(encoded_images) if encoded_images else 0} images")

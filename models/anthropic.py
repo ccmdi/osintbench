@@ -7,17 +7,26 @@ from PIL import Image
 import os
 
 from tools import TOOLS_BASIC
+from models.trl import TokenRateLimiter
+import time
 
 class AnthropicClient(BaseMultimodalModel):
     api_key_name = "ANTHROPIC_API_KEY"
     base_url = "https://api.anthropic.com/v1/messages"
+    provider = "Anthropic"
     anthropic_version: str = "2023-06-01"
+    max_tokens: int = 64000
     beta_header: str = None
     enable_thinking: bool = False
     tools: List = None
+    cache: bool = False
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.rate_limiter = TokenRateLimiter(max_tokens_per_minute=35000) # Tier 2 input requirements
 
     def _encode_image(self, image_path: str, max_file_size: int = 4 * 1024 * 1024) -> tuple[str, str]:
-        """Encode image to base64, ensuring it stays under max_file_size bytes."""
+        """Encode image with downscaling."""
         logger.debug(f"Encoding image: {image_path} (max size: {max_file_size} bytes)")
         media_type = get_image_media_type(image_path)
         
@@ -80,10 +89,9 @@ class AnthropicClient(BaseMultimodalModel):
             "anthropic-version": self.anthropic_version,
             "content-type": "application/json"
         }
-        effective_beta_header = getattr(self, 'beta_header', None)
-        if effective_beta_header:
-             headers["anthropic-beta"] = effective_beta_header
-             logger.debug(f"Added beta header: {effective_beta_header}")
+        if self.beta_header:
+            headers["anthropic-beta"] = self.beta_header
+            logger.debug(f"Added beta header: {self.beta_header}")
         return headers
 
     def _build_payload(self, text_content: List[str], encoded_images: List[Tuple[str, str]] = None) -> dict:
@@ -91,19 +99,27 @@ class AnthropicClient(BaseMultimodalModel):
         content = []
         # Text
         for text in text_content:
-            content.append({"type": "text", "text": text})
+            text_block = {"type": "text", "text": text}
+            if self.cache:
+                text_block["cache_control"] = {"type": "ephemeral"}
+            
+            content.append(text_block)
         
         # Images
         if encoded_images:
             for img_data, media_type in encoded_images:
-                content.append({
+                image_block = {
                     "type": "image", 
                     "source": {
                         "type": "base64", 
                         "media_type": media_type, 
                         "data": img_data
                     }
-                })
+                }
+
+                if self.cache:
+                    image_block["cache_control"] = {"type": "ephemeral"}
+                content.append(image_block)
 
         payload = {
             "model": self.model_identifier,
@@ -113,11 +129,16 @@ class AnthropicClient(BaseMultimodalModel):
         }
 
         if self.tools:
-            for tool in self.tools:
-                tool["input_schema"] = tool["parameters"]
-                del tool["parameters"]
+            payload["tools"] = [
+                {
+                    **tool,
+                    "input_schema": tool["parameters"]
+                } for tool in self.tools
+            ]
 
-            payload["tools"] = self.tools
+            for tool in payload["tools"]:
+                tool.pop("parameters", None)
+
             logger.debug(f"Added {len(self.tools)} tools to payload")
         
         if self.enable_thinking:
@@ -162,29 +183,32 @@ class AnthropicClient(BaseMultimodalModel):
                 })
                 logger.debug(f"Function {func_name} completed")
             
-            # Build assistant message content: thinking blocks FIRST, then tool_use blocks
-            assistant_content = thinking_parts + function_calls  # ✅ Thinking first!
+            #TODO: ordering
+            assistant_content = thinking_parts + function_calls
             
-            # Add model's function call response to the existing payload
+            # Text + thinking history
             self.payload["messages"].append({
                 "content": assistant_content,
                 "role": "assistant"
             })
             
-            # Add function responses to the existing payload
+            # Function response history
             self.payload["messages"].append({
                 "content": function_responses, 
                 "role": "user"
             })
             
-            # Make follow-up request with the updated payload
+            # Apply rate limiting
+            self.rate_limiter.apply(self.payload)
+
             logger.debug("Making follow-up API request with function responses")
-            headers = self._build_headers()
-            endpoint = self._get_endpoint()
-            
             try:
-                self.response = requests.post(endpoint, headers=headers, json=self.payload, timeout=600)
+                self.response = requests.post(self.endpoint, headers=self.headers, json=self.payload, timeout=600)
                 self.response.raise_for_status()
+                
+                input_tokens = self.get_token_usage(self.response).get("input_tokens", 0)
+                self.rate_limiter.track(input_tokens)
+                
                 logger.debug("Follow-up API request successful")
             except requests.exceptions.Timeout:
                 logger.error("Follow-up API request timed out")
@@ -194,27 +218,31 @@ class AnthropicClient(BaseMultimodalModel):
                 raise
 
     def _is_model_finished(self, response_json: dict) -> bool:
-        """The model is finished when it returns STOP with NO function calls."""
         try:
             finish_reason = response_json.get('stop_reason', '')
-            has_function_calls = False
+            # has_function_calls = False
 
-            parts = response_json.get('content', [])
-            for part in parts:
-                if part.get('type') == 'tool_use' or part.get('type') == 'server_tool_use' or part.get('type') == 'pause_turn':
-                    has_function_calls = True
-                    break
+            # parts = response_json.get('content', [])
+            # for part in parts:
+            #     if part.get('type') == 'tool_use' or part.get('type') == 'server_tool_use' or part.get('type') == 'pause_turn':
+            #         has_function_calls = True
+            #         break
             
-            # Only finished if STOP with no function calls
-            if finish_reason == 'end_turn':
-                is_finished = not has_function_calls
-                logger.debug(f"Model finish check: reason={finish_reason}, has_function_calls={has_function_calls}, finished={is_finished}")
-                return is_finished
+            # # Only finished if STOP with no function calls
+            # if finish_reason == 'end_turn':
+            #     is_finished = not has_function_calls
+            #     logger.debug(f"Model finish check: reason={finish_reason}, has_function_calls={has_function_calls}, finished={is_finished}")
+            #     return is_finished
             
-            # Other finish reasons indicate completion
-            is_finished = finish_reason in ['refusal', 'stop_sequence', 'max_token']
-            logger.debug(f"Model finish check: reason={finish_reason}, finished={is_finished}")
-            return is_finished
+            # # Other finish reasons indicate completion
+            # is_finished = finish_reason in ['refusal', 'stop_sequence', 'max_token']
+            # logger.debug(f"Model finish check: reason={finish_reason}, finished={is_finished}")
+            # return is_finished
+
+            if finish_reason in ['end_turn', 'stop_sequence', 'max_tokens', 'refusal']:
+                return True
+            else:
+                return False
             
         except (KeyError, IndexError, TypeError) as e:
             logger.warning(f"Error checking if model is finished: {e}, assuming finished")
@@ -238,37 +266,88 @@ class AnthropicClient(BaseMultimodalModel):
              return response_text
         else:
              raise ValueError(f"Could not extract text from Anthropic response: {response_json}")
-        
-class Claude3_7Sonnet(AnthropicClient):
-    name = "Claude 3.7 Sonnet"
-    model_identifier = "claude-3-7-sonnet-20250219"
     
-    # tools = [{"type": "web_search_20250305", "name": "web_search"}]
-    tools = TOOLS_BASIC
+    def get_token_usage(self, response: requests.Response) -> dict:
+        response_json = response.json()
+        usage = response_json.get("usage", {})
+
+        if usage:
+            return {
+                "input_tokens": usage["input_tokens"],
+                "output_tokens": usage["output_tokens"],
+                "cache_read_tokens": usage.get("cache_read_input_tokens", 0)
+            }
+        return {}
+    
+    # def get_rate_limit_status(self) -> dict:
+    #     """Get current rate limit status."""
+    #     with self.rate_limiter.lock:
+    #         current_time = time.time()
+    #         current_usage = self.rate_limiter._get_current_usage(current_time)
+            
+    #         return {
+    #             "current_usage": current_usage,
+    #             "limit": self.rate_limiter.max_tokens_per_minute,
+    #             "remaining": max(0, self.rate_limiter.max_tokens_per_minute - current_usage),
+    #             "usage_percentage": (current_usage / self.rate_limiter.max_tokens_per_minute) * 100,
+    #             "window_seconds": self.rate_limiter.window_seconds
+    #         }
+
+
 class Claude3_7SonnetThinking(AnthropicClient):
     name = "Claude 3.7 Sonnet (Thinking)"
     model_identifier = "claude-3-7-sonnet-20250219"
     enable_thinking = True
     rate_limit = 2
-    beta_header = "output-128k-2025-02-19"
+    beta_header = "interleaved-thinking-2025-05-14,extended-cache-ttl-2025-04-11"
 
-    # tools = [{"type": "web_search_20250305", "name": "web_search"}]
     tools = TOOLS_BASIC
+
+class Claude4SonnetThinking_NoTools(AnthropicClient):
+    name = "Claude 4 Sonnet (Thinking)"
+    model_identifier = "claude-sonnet-4-20250514"
+    enable_thinking = True
+    rate_limit = 2
+    beta_header = "extended-cache-ttl-2025-04-11"
+    cache = True
+
+class Claude4SonnetThinking_ServerWebSearch(AnthropicClient):
+    name = "Claude 4 Sonnet (Thinking)"
+    model_identifier = "claude-sonnet-4-20250514"
+    enable_thinking = True
+    rate_limit = 0.2
+    beta_header = "interleaved-thinking-2025-05-14,extended-cache-ttl-2025-04-11"
+    cache = True
+
+    tools = [{"type": "web_search_20250305", "name": "web_search"}]
+    
 class Claude4SonnetThinking(AnthropicClient):
     name = "Claude 4 Sonnet (Thinking)"
     model_identifier = "claude-sonnet-4-20250514"
     enable_thinking = True
     rate_limit = 0.2
-    beta_header = "output-128k-2025-02-19"
+    beta_header = "interleaved-thinking-2025-05-14,extended-cache-ttl-2025-04-11"
+    cache = True
 
     # tools = [{"type": "web_search_20250305", "name": "web_search"}]
     tools = TOOLS_BASIC
+
+class Claude4OpusThinking_ServerWebSearch(AnthropicClient):
+    name = "Claude 4 Opus (Thinking)"
+    model_identifier = "claude-opus-4-20250514"
+    enable_thinking = True
+    rate_limit = 0.2
+    beta_header = "interleaved-thinking-2025-05-14,extended-cache-ttl-2025-04-11"
+    cache = True
+
+    tools = [{"type": "web_search_20250305", "name": "web_search"}]
+
 class Claude4OpusThinking(AnthropicClient):
     name = "Claude 4 Opus (Thinking)"
     model_identifier = "claude-opus-4-20250514"
     enable_thinking = True
     rate_limit = 0.2
-    beta_header = "output-128k-2025-02-19"
+    beta_header = "interleaved-thinking-2025-05-14,extended-cache-ttl-2025-04-11"
+    cache = True
 
-    # tools = [{"type": "web_search_20250305", "name": "web_search"}]
     tools = TOOLS_BASIC

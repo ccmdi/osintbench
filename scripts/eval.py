@@ -6,7 +6,6 @@ from typing import Dict, Any
 import haversine
 
 from models import Gemini2Flash
-from prompt import system_prompt
 from util import get_logger
 
 
@@ -39,7 +38,7 @@ class Judge:
 
         Response to parse: {response}
         """
-            judge_response = self.model.query(system_prompt(judge_parse_prompt))
+            judge_response = self.model.query(judge_parse_prompt)
 
             if run_folder:
                 os.makedirs(f"{run_folder}/judge", exist_ok=True)
@@ -86,7 +85,7 @@ class Judge:
         REASONING: Brief explanation of why it's correct or incorrect"""
 
         try:
-            judge_response = self.model.query(system_prompt(judge_eval_prompt))
+            judge_response = self.model.query(judge_eval_prompt)
             
             if run_folder:
                 os.makedirs(f"{run_folder}/judge", exist_ok=True)

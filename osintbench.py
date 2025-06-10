@@ -1,7 +1,7 @@
 import os
 import json
 import pandas as pd
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 import datetime
 import argparse
@@ -11,7 +11,7 @@ from scripts.eval import evaluate_answer, get_parser
 from models import *
 from prompt import get_prompt
 from util import setup_logging, get_logger
-from context import set_case, set_dataset_path, get_dataset_path
+from context import set_case, set_dataset_path, set_benchmark
 
 load_dotenv()
 
@@ -124,7 +124,6 @@ class OsintBenchmark:
         for i, case in enumerate(cases_to_test, 1):
             logger.announcement(f"Testing case {i}/{len(cases_to_test)}")
             set_case(case)
-            set_dataset_path(self.dataset_path)
             self._evaluate_case(case, run_folder)
             self.save_results(run_folder + "/results/")
         
@@ -173,7 +172,6 @@ class OsintBenchmark:
                 except ValueError as parse_error:
                     logger.warning(f"Parse error for case {case.case_id} (attempt {attempt+1}): {str(parse_error)}")
                     if "missing required fields" in str(parse_error) or "parse" in str(parse_error):
-                        # Add error result for each task in the case
                         for task in case.tasks:
                             error_result = BenchmarkResult(
                                 case_obj=case, 
@@ -226,7 +224,6 @@ class OsintBenchmark:
         
         valid_tasks = sum(1 for r in self.results if not r.refused and r.evaluation)
 
-        # Use r.task_type instead of r.evaluation.get('type')
         location_tasks = sum(1 for r in self.results if not r.refused and r.evaluation and r.task_type == 'location')
         identification_tasks = sum(1 for r in self.results if not r.refused and r.evaluation and r.task_type == 'identification')
         temporal_tasks = sum(1 for r in self.results if not r.refused and r.evaluation and r.task_type == 'temporal')
@@ -250,6 +247,7 @@ class OsintBenchmark:
             "overall_accuracy": total_score / valid_tasks if valid_tasks > 0 else 0,
             "task_accuracy": correct_tasks / valid_tasks if valid_tasks > 0 else 0,
             "tools": self.model.get_tools(),
+            "provider": self.model.provider,
             "detailed_results": self.results
         }
         
@@ -303,6 +301,8 @@ if __name__ == "__main__":
         model=args.model,
         max_retries=args.max_retries
     )
+    set_benchmark(benchmark)
+    set_dataset_path(benchmark.dataset_path)
 
     runtime = datetime.datetime.now().strftime('%Y-%m-%dT%H_%M_%S')
     run_folder = f"responses/{benchmark.model.name}_{args.dataset}_{runtime}"

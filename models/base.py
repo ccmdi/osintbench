@@ -34,7 +34,7 @@ class BaseMultimodalModel(ABC):
     api_key_name: str = None
     model_identifier: str = None
     name: str = None
-    rate_limit: int = 5
+    rate_limit: int = 5 # RPM
     rate_limit_period: int = 60
     max_tokens: int = 128000
     temperature: float = 0.4
@@ -59,6 +59,11 @@ class BaseMultimodalModel(ABC):
     def _build_payload(self, text_content: List[str], encoded_images: List[Tuple[str, str]]) -> dict: 
         """Build the API payload using text content and encoded images."""
         pass
+    
+    @abstractmethod
+    def get_token_usage(self, response: requests.Response) -> dict:
+        """Get the token usage for a response."""
+        pass
 
     def _get_endpoint(self) -> str: 
         """Get the API endpoint URL."""
@@ -73,7 +78,6 @@ class BaseMultimodalModel(ABC):
         logger.debug(f"Executing function call: {function_name}")
         import tools
 
-        #TODO
         def convert_bytes_to_str(obj):
             if isinstance(obj, dict):
                 return {k: convert_bytes_to_str(v) for k, v in obj.items()}
@@ -131,26 +135,20 @@ class BaseMultimodalModel(ABC):
                 import json
                 if isinstance(response, requests.Response):
                     try:
-                        # Parse and reformat the JSON for pretty printing
                         response_json = response.json()
                         json.dump(response_json, f, indent=2, ensure_ascii=False)
                     except (json.JSONDecodeError, ValueError):
-                        # Fallback to raw text if not valid JSON
                         logger.warning(f"Response is not valid JSON, saving as text")
                         f.write(response.text)
                 elif isinstance(response, (dict, list)):
-                    # Already a Python object, format it nicely
                     json.dump(response, f, indent=2, ensure_ascii=False)
                 elif isinstance(response, str):
                     try:
-                        # Try to parse string as JSON
                         parsed = json.loads(response)
                         json.dump(parsed, f, indent=2, ensure_ascii=False)
                     except json.JSONDecodeError:
-                        # Not JSON, save as-is
                         f.write(response)
                 else:
-                    # Convert to string and try to parse as JSON
                     response_str = str(response)
                     try:
                         parsed = json.loads(response_str)
@@ -158,7 +156,18 @@ class BaseMultimodalModel(ABC):
                     except json.JSONDecodeError:
                         f.write(response_str)
 
+    def _save_conversation_state(self, run_folder: str):
+        """Save current payload and response state."""
+        case = get_case()
+        if not (run_folder and case and case.case_id):
+            return
+        
+        self.save_json(self.payload, run_folder, f"payload")
+        self.save_json(self.response, run_folder, f"response")
+
+    @abstractmethod
     def _is_model_finished(self, response_json: dict) -> bool:
+        """Check if the model is finished."""
         logger.warning(f"Model finish check not implemented for {self.__class__.__bases__[0].__name__}")
         return True
 
@@ -194,20 +203,10 @@ class BaseMultimodalModel(ABC):
                 while not self._is_model_finished(self.response.json()):
                     logger.debug("Model has not finished, continuing conversation with function calls")
                     response_json = self.response.json()
-                    self.save_json(self.payload, run_folder, "payload")
-                    self.save_json(self.response, run_folder)
+                    self._save_conversation_state(run_folder)
                     self._handle_function_calls(response_json)
 
-                if run_folder and case.case_id:
-                    #FINAL
-                    self.save_json(self.payload, run_folder, "payload")
-                    self.save_json(self.response, run_folder)
-                    logger.debug(f"Saved response JSON for case {case.case_id}")
-
-                    with open(f"payload.json", "w", encoding="utf-8") as f:
-                        import json
-                        f.write(json.dumps(self.payload, indent=4))
-                    logger.debug("Saved payload JSON for debugging")
+                self._save_conversation_state(run_folder)
                 
                 result = self._extract_response_text(self.response)
                 logger.info(f"Successfully extracted response text from {self.name}")

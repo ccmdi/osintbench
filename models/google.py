@@ -8,19 +8,27 @@ class GoogleClient(BaseMultimodalModel):
     api_key_name = "GEMINI_API_KEY"
     base_url = "https://generativelanguage.googleapis.com"
     api_version_path: str = "" # e.g., "beta/" for experimental versions
-    tools: str = None
+    tools: List[str] = None
+    provider = "Google"
 
     def _get_endpoint(self) -> str:
         action = "generateContent"
         version_path = getattr(self, 'api_version_path', '')
         return f"{self.base_url}/{version_path}/models/{self.model_identifier}:{action}?key={self.api_key}"
 
+    def get_token_usage(self, response: requests.Response) -> dict:
+        """Get the token usage for a response."""
+        response_json = response.json()
+        return {
+            "input_tokens": response_json.get("usageMetadata", {}).get("promptTokenCount", 0),
+            "output_tokens": response_json.get("usageMetadata", {}).get("candidatesTokenCount", 0)
+        }
+
     def get_tools(self) -> List[str]:
         """Get the tools for the model."""
         if not self.tools:
             return []
         
-        # Handle Google's format: [{"function_declarations": [...]}] or [{"google_search": {}}]
         for tool_group in self.tools:
             if 'function_declarations' in tool_group:
                 return [tool.get('name') for tool in tool_group['function_declarations']]
@@ -73,7 +81,6 @@ class GoogleClient(BaseMultimodalModel):
             elif 'text' in part:
                 text_parts.append(part['text'])
 
-        # If there are function calls, execute them and continue the conversation
         if function_calls:
             logger.function_call(f"{len(function_calls)}: {function_calls}")
             
@@ -93,33 +100,28 @@ class GoogleClient(BaseMultimodalModel):
                 })
                 logger.debug(f"Function {func_name} completed")
             
-            # Add model's function call response to the existing payload
             self.payload["contents"].append({
                 "parts": [{"text": part} for part in text_parts] + [{"functionCall": fc} for fc in function_calls], 
                 "role": "model"
             })
             
-            # Add function responses to the existing payload
             self.payload["contents"].append({
                 "parts": function_responses, 
                 "role": "user"
             })
             
-            # Make follow-up request with the updated payload
             logger.debug("Making follow-up API request with function responses")
-            headers = self._build_headers()
-            endpoint = self._get_endpoint()
-            
+
             max_attempts = 3
             for attempt in range(max_attempts):
                 try:
                     if attempt > 0:
                         logger.info(f"Retrying follow-up request (attempt {attempt + 1}/{max_attempts})")
                     
-                    self.response = requests.post(endpoint, headers=headers, json=self.payload, timeout=(5, 300))
+                    self.response = requests.post(self.endpoint, headers=self.headers, json=self.payload, timeout=(5, 300))
                     self.response.raise_for_status()
                     logger.debug("Follow-up API request successful")
-                    break  # Success, exit the retry loop
+                    break
                     
                 except requests.exceptions.Timeout:
                     if attempt < max_attempts - 1:
@@ -191,11 +193,11 @@ class Gemini2_5Pro0605(GoogleClient):
     rate_limit = 2
     api_version_path = "v1beta"
     
-    tools = [{"function_declarations": TOOLS_BASIC_FULL}]
+    tools = [{"function_declarations": TOOLS_BASIC}]
 class Gemini2_5Flash(GoogleClient):
     name = "Gemini 2.5 Flash Preview"
     model_identifier = "gemini-2.5-flash-preview-04-17"
     rate_limit = 2
     api_version_path = "v1beta"
 
-    # tools = [{"function_declarations": TOOLS_BASIC_FULL}]
+    tools = [{"function_declarations": TOOLS_BASIC}]
