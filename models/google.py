@@ -2,7 +2,7 @@ from models.base import BaseMultimodalModel, logger
 from typing import List, Tuple
 import requests
 
-from tools import TOOLS
+from tools import TOOLS_BASIC, TOOLS_BASIC_FULL
 
 class GoogleClient(BaseMultimodalModel):
     api_key_name = "GEMINI_API_KEY"
@@ -60,7 +60,7 @@ class GoogleClient(BaseMultimodalModel):
 
         return payload
 
-    def _handle_function_calls(self, response_json: dict) -> str:
+    def _handle_function_calls(self, response_json: dict) -> None:
         logger.debug(response_json)
         parts = response_json['candidates'][0]['content']['parts']
         
@@ -110,27 +110,28 @@ class GoogleClient(BaseMultimodalModel):
             headers = self._build_headers()
             endpoint = self._get_endpoint()
             
-            try:
-                with open("payload_test.json", "w") as f:
-                    import json
-                    json.dump(self.payload, f)
-                self.response = requests.post(endpoint, headers=headers, json=self.payload, timeout=600)
-                self.response.raise_for_status()
-                logger.debug("Follow-up API request successful")
-            except requests.exceptions.Timeout:
-                logger.error("Follow-up API request timed out")
-                raise Exception("API request timed out")
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Follow-up API request failed: {str(e)}")
-                raise
-            
-            # Extract final text response
-            final_parts = self.response.json()['candidates'][0]['content']['parts']
-            return ''.join(part.get('text', '') for part in final_parts)
-        
-        # No function calls, just return text
-        logger.debug("No function calls found, returning text parts")
-        return ''.join(text_parts)
+            max_attempts = 3
+            for attempt in range(max_attempts):
+                try:
+                    if attempt > 0:
+                        logger.info(f"Retrying follow-up request (attempt {attempt + 1}/{max_attempts})")
+                    
+                    self.response = requests.post(endpoint, headers=headers, json=self.payload, timeout=(5, 300))
+                    self.response.raise_for_status()
+                    logger.debug("Follow-up API request successful")
+                    break  # Success, exit the retry loop
+                    
+                except requests.exceptions.Timeout:
+                    if attempt < max_attempts - 1:
+                        logger.warning(f"Follow-up API request timed out, will retry...")
+                        continue  # Try again
+                    else:
+                        logger.error(f"Follow-up API request timed out after {max_attempts} attempts")
+                        raise Exception(f"API request timed out after {max_attempts} attempts")
+                        
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"Follow-up API request failed: {str(e)}")
+                    raise
     
     def _is_model_finished(self, response_json: dict) -> bool:
         """The model is finished when it returns STOP with NO function calls."""
@@ -175,25 +176,26 @@ class Gemini2Flash(GoogleClient):
     rate_limit = 10
     api_version_path = "v1beta"
 
-    tools = [{"google_search": {}}]
+    # tools = [{"google_search": {}}]
+    tools = [{"function_declarations": TOOLS_BASIC}]
 class Gemini2_5Pro(GoogleClient):
     name = "Gemini 2.5 Pro"
     model_identifier = "gemini-2.5-pro-preview-05-06"
     rate_limit = 2
     api_version_path = "v1beta"
 
-    tools = [{"function_declarations": TOOLS}]
+    tools = [{"function_declarations": TOOLS_BASIC}]
 class Gemini2_5Pro0605(GoogleClient):
     name = "Gemini 2.5 Pro 06-05"
     model_identifier = "gemini-2.5-pro-preview-06-05"
     rate_limit = 2
     api_version_path = "v1beta"
     
-    tools = [{"function_declarations": TOOLS}]
+    tools = [{"function_declarations": TOOLS_BASIC_FULL}]
 class Gemini2_5Flash(GoogleClient):
     name = "Gemini 2.5 Flash Preview"
     model_identifier = "gemini-2.5-flash-preview-04-17"
     rate_limit = 2
     api_version_path = "v1beta"
 
-    tools = [{"function_declarations": TOOLS}]
+    # tools = [{"function_declarations": TOOLS_BASIC_FULL}]

@@ -5,6 +5,8 @@ from abc import ABC, abstractmethod
 from ratelimit import limits, sleep_and_retry
 from typing import List, Tuple
 
+from context import get_case
+
 from util import get_logger
 logger = get_logger(__name__)
 
@@ -34,7 +36,7 @@ class BaseMultimodalModel(ABC):
     name: str = None
     rate_limit: int = 5
     rate_limit_period: int = 60
-    max_tokens: int = 64000
+    max_tokens: int = 128000
     temperature: float = 0.4
 
     def __init__(self, api_key: str):
@@ -109,7 +111,9 @@ class BaseMultimodalModel(ABC):
         pass
 
     
-    def save_json(self, response, run_folder: str, case, name = None) -> None:
+    def save_json(self, response, run_folder: str, name = None) -> None:
+        case = get_case()
+        
         if run_folder and case.case_id:
             logger.debug(f"Saving JSON response for case {case.case_id} to {run_folder}/json/")
             os.makedirs(f"{run_folder}/json/", exist_ok=True)
@@ -158,12 +162,14 @@ class BaseMultimodalModel(ABC):
         logger.warning(f"Model finish check not implemented for {self.__class__.__bases__[0].__name__}")
         return True
 
-    def query(self, prompt: str, case = None, run_folder: str = None) -> str:
+    def query(self, prompt: str, run_folder: str = None) -> str:
         """
         Query the model.
         """
         logger.info(f"Starting query for model {self.name}")
         logger.debug(f"Prompt length: {len(prompt)} characters")
+        
+        case = get_case()
         if case:
             logger.debug(f"Case has {len(case.images)} images")
 
@@ -188,14 +194,14 @@ class BaseMultimodalModel(ABC):
                 while not self._is_model_finished(self.response.json()):
                     logger.debug("Model has not finished, continuing conversation with function calls")
                     response_json = self.response.json()
-                    self.save_json(self.payload, run_folder, case, "payload")
-                    self.save_json(self.response, run_folder, case)
+                    self.save_json(self.payload, run_folder, "payload")
+                    self.save_json(self.response, run_folder)
                     self._handle_function_calls(response_json)
 
                 if run_folder and case.case_id:
                     #FINAL
-                    self.save_json(self.payload, run_folder, case, "payload")
-                    self.save_json(self.response, run_folder, case)
+                    self.save_json(self.payload, run_folder, "payload")
+                    self.save_json(self.response, run_folder)
                     logger.debug(f"Saved response JSON for case {case.case_id}")
 
                     with open(f"payload.json", "w", encoding="utf-8") as f:

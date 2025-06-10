@@ -11,6 +11,7 @@ from scripts.eval import evaluate_answer, get_parser
 from models import *
 from prompt import get_prompt
 from util import setup_logging, get_logger
+from context import set_case, set_dataset_path, get_dataset_path
 
 load_dotenv()
 
@@ -122,6 +123,8 @@ class OsintBenchmark:
         
         for i, case in enumerate(cases_to_test, 1):
             logger.announcement(f"Testing case {i}/{len(cases_to_test)}")
+            set_case(case)
+            set_dataset_path(self.dataset_path)
             self._evaluate_case(case, run_folder)
             self.save_results(run_folder + "/results/")
         
@@ -133,7 +136,7 @@ class OsintBenchmark:
         for attempt in range(self.max_retries):
             try:
                 logger.debug(f"Querying model for case {case.case_id} (attempt {attempt+1})")
-                response = self.model.query(get_prompt(case), case, run_folder)
+                response = self.model.query(get_prompt(case), run_folder)
                 
                 os.makedirs(f"{run_folder}/output/", exist_ok=True)
                 with open(f"{run_folder}/output/{case.case_id}.txt", "w", encoding="utf-8") as f:
@@ -306,7 +309,7 @@ if __name__ == "__main__":
     
     log_file = setup_logging(run_folder, args.log_level)
     
-    logger.announcement(f"Starting OSINT Benchmark - Model: {benchmark.model.name}, Dataset: {args.dataset}")
+    logger.announcement(f"Starting OSINT Benchmark - Model: {benchmark.model.name}, Dataset: {args.dataset}, Tools: {len(benchmark.model.get_tools())}")
     logger.info(f"Run folder: {run_folder}")
     logger.info(f"Log file: {log_file}")
     

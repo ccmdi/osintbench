@@ -6,7 +6,7 @@ import io
 from PIL import Image
 import os
 
-from tools import TOOLS
+from tools import TOOLS_BASIC
 
 class AnthropicClient(BaseMultimodalModel):
     api_key_name = "ANTHROPIC_API_KEY"
@@ -127,7 +127,7 @@ class AnthropicClient(BaseMultimodalModel):
             logger.debug("Enabled thinking mode")
         return payload
 
-    def _handle_function_calls(self, response_json: dict) -> str:
+    def _handle_function_calls(self, response_json: dict) -> None:
         parts = response_json['content']
 
         function_calls = []
@@ -192,14 +192,6 @@ class AnthropicClient(BaseMultimodalModel):
             except requests.exceptions.RequestException as e:
                 logger.error(f"Follow-up API request failed: {str(e)}")
                 raise
-            
-            # Extract final text response
-            final_parts = self.response.json()['content']
-            return ''.join(part.get('text', '') for part in final_parts)
-        
-        # No function calls, just return text
-        logger.debug("No function calls found, returning text parts")
-        return ''.join(text_parts)
 
     def _is_model_finished(self, response_json: dict) -> bool:
         """The model is finished when it returns STOP with NO function calls."""
@@ -251,7 +243,8 @@ class Claude3_7Sonnet(AnthropicClient):
     name = "Claude 3.7 Sonnet"
     model_identifier = "claude-3-7-sonnet-20250219"
     
-    tools = [{"type": "web_search_20250305", "name": "web_search"}]
+    # tools = [{"type": "web_search_20250305", "name": "web_search"}]
+    tools = TOOLS_BASIC
 class Claude3_7SonnetThinking(AnthropicClient):
     name = "Claude 3.7 Sonnet (Thinking)"
     model_identifier = "claude-3-7-sonnet-20250219"
@@ -259,7 +252,8 @@ class Claude3_7SonnetThinking(AnthropicClient):
     rate_limit = 2
     beta_header = "output-128k-2025-02-19"
 
-    tools = [{"type": "web_search_20250305", "name": "web_search"}]
+    # tools = [{"type": "web_search_20250305", "name": "web_search"}]
+    tools = TOOLS_BASIC
 class Claude4SonnetThinking(AnthropicClient):
     name = "Claude 4 Sonnet (Thinking)"
     model_identifier = "claude-sonnet-4-20250514"
@@ -268,7 +262,7 @@ class Claude4SonnetThinking(AnthropicClient):
     beta_header = "output-128k-2025-02-19"
 
     # tools = [{"type": "web_search_20250305", "name": "web_search"}]
-    tools = TOOLS
+    tools = TOOLS_BASIC
 class Claude4OpusThinking(AnthropicClient):
     name = "Claude 4 Opus (Thinking)"
     model_identifier = "claude-opus-4-20250514"
@@ -276,4 +270,5 @@ class Claude4OpusThinking(AnthropicClient):
     rate_limit = 0.2
     beta_header = "output-128k-2025-02-19"
 
-    tools = [{"type": "web_search_20250305", "name": "web_search"}]
+    # tools = [{"type": "web_search_20250305", "name": "web_search"}]
+    tools = TOOLS_BASIC

@@ -69,6 +69,95 @@ class OpenAIClient(BaseMultimodalModel):
             logger.warning(f"Error checking if model is finished: {e}, assuming finished")
             return True
 
+    def _handle_function_calls(self, response_json: dict) -> None:
+        logger.debug(response_json)
+        parts = response_json['output']
+        
+        function_calls = []
+        text_parts = []
+        
+        for part in parts:
+            if part.get('type') == 'function_call':
+                function_calls.append(part)
+            elif part.get('type') == 'message':
+                # Extract text from message content
+                content_items = part.get('content', [])
+                for content_item in content_items:
+                    if content_item.get('type') == 'output_text':
+                        text_parts.append(content_item.get('text', ''))
+
+        # If there are function calls, execute them and continue the conversation
+        if function_calls:
+            logger.function_call(f"{len(function_calls)}: {function_calls}")
+            
+            # Execute all function calls
+            function_responses = []
+            for func_call in function_calls:
+                func_id = func_call.get('id')
+                call_id = func_call.get('call_id')
+                func_name = func_call['name']
+                func_args = func_call.get('arguments', '{}')
+                
+                # Parse arguments from JSON string
+                try:
+                    import json
+                    func_args_dict = json.loads(func_args)
+                except json.JSONDecodeError:
+                    logger.error(f"Failed to parse function arguments: {func_args}")
+                    func_args_dict = {}
+                
+                logger.debug(f"Calling {func_name} with args: {func_args_dict}")
+                
+                result = self._execute_function_call(func_name, func_args_dict)
+                function_responses.append({
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": str(result)
+                })
+                logger.debug(f"Function {func_name} completed")
+            
+            # Add model's function call response to the input messages
+            # First, append the function calls themselves
+            self.payload["input"].append({
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": part} for part in text_parts]
+            })
+            
+            # Add the actual function call items to track what was called
+            for func_call in function_calls:
+                self.payload["input"].append(func_call)
+            
+            # Add function responses as user messages
+            self.payload["input"].extend(function_responses)
+            
+            # Make follow-up request with the updated payload
+            logger.debug("Making follow-up API request with function responses")
+            headers = self._build_headers()
+            endpoint = self._get_endpoint()
+            
+            try:
+                self.response = requests.post(endpoint, headers=headers, json=self.payload, timeout=600)
+                self.response.raise_for_status()
+                logger.debug("Follow-up API request successful")
+            except requests.exceptions.Timeout:
+                logger.error("Follow-up API request timed out")
+                raise Exception("API request timed out")
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Follow-up API request failed: {str(e)}")
+                raise
+            
+            # Extract final text response
+            final_response_json = self.response.json()
+            final_parts = final_response_json['output']
+            final_text_parts = []
+            
+            for part in final_parts:
+                if part.get('type') == 'message':
+                    content_items = part.get('content', [])
+                    for content_item in content_items:
+                        if content_item.get('type') == 'output_text':
+                            final_text_parts.append(content_item.get('text', ''))
+
     def _extract_response_text(self, response: requests.Response) -> str:
         logger.debug("Extracting text from OpenAI response")
         response_json = response.json()
