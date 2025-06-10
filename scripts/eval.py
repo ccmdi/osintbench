@@ -90,7 +90,7 @@ class Judge:
             
             if run_folder:
                 os.makedirs(f"{run_folder}/judge", exist_ok=True)
-                with open(f"{run_folder}/judge/{case_id}_{task.task_id}.txt", "w") as f:
+                with open(f"{run_folder}/judge/{case_id}_{task.task_id}.txt", "w", encoding="utf-8") as f:
                     f.write(judge_response)
 
             return self._parse_judge_response(judge_response)
