@@ -78,6 +78,7 @@ Models go by their class name in `models.py`. Gemini 2.5 Flash goes by `Gemini2_
     - [x] Google Street View
 - [ ] **High quality, human-verified datasets**
 - [ ] Higher prompt quality to improve performance
+- [ ] Prompt batching/parallel runs
 - [ ] Video support?
 - [ ] Recursive prompting/self-evaluation
 - [ ] Release
