@@ -179,7 +179,7 @@ class Gemini2Flash(GoogleClient):
     api_version_path = "v1beta"
 
     # tools = [{"google_search": {}}]
-    tools = [{"function_declarations": TOOLS_BASIC}]
+    # tools = [{"function_declarations": TOOLS_BASIC}]
 class Gemini2_5Pro(GoogleClient):
     name = "Gemini 2.5 Pro"
     model_identifier = "gemini-2.5-pro-preview-05-06"

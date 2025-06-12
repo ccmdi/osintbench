@@ -2,6 +2,8 @@ from models.base import BaseMultimodalModel, logger
 from typing import List, Tuple
 import requests
 
+from tools import TOOLS_BASIC
+
 class OpenAIClient(BaseMultimodalModel):
     api_key_name = "OPENAI_API_KEY"
     base_url = "https://api.openai.com/v1/responses"
@@ -54,6 +56,11 @@ class OpenAIClient(BaseMultimodalModel):
 
         if self.tools:
              payload["tools"] = self.tools
+
+             for tool in self.tools:
+                 tool['type'] = 'function'
+
+             
              logger.debug(f"Added {len(self.tools)} tools to OpenAI payload")
         return payload
 
@@ -63,7 +70,7 @@ class OpenAIClient(BaseMultimodalModel):
             parts = response_json['output']
             status = response_json.get('status', '')
             
-            has_function_calls = any('function_call' in part for part in parts)
+            has_function_calls = any('function_call' in part.get('type', '') for part in parts)
             
             if status == 'completed':
                 is_finished = not has_function_calls
@@ -80,43 +87,33 @@ class OpenAIClient(BaseMultimodalModel):
             return True
 
     def _handle_function_calls(self, response_json: dict) -> None:
-        logger.debug(response_json)
         parts = response_json['output']
         
         function_calls = []
-        text_parts = []
         
         for part in parts:
             if part.get('type') == 'function_call':
                 function_calls.append(part)
-            elif part.get('type') == 'message':
-                # Extract text from message content
-                content_items = part.get('content', [])
-                for content_item in content_items:
-                    if content_item.get('type') == 'output_text':
-                        text_parts.append(content_item.get('text', ''))
-
-        # If there are function calls, execute them and continue the conversation
+        
+        if not function_calls:
+            return
+        
+        # Execute function calls
         if function_calls:
             logger.function_call(f"{len(function_calls)}: {function_calls}")
             
-            # Execute all function calls
             function_responses = []
             for func_call in function_calls:
-                func_id = func_call.get('id')
                 call_id = func_call.get('call_id')
                 func_name = func_call['name']
                 func_args = func_call.get('arguments', '{}')
-                
-                # Parse arguments from JSON string
+
                 try:
                     import json
                     func_args_dict = json.loads(func_args)
                 except json.JSONDecodeError:
                     logger.error(f"Failed to parse function arguments: {func_args}")
                     func_args_dict = {}
-                
-                logger.debug(f"Calling {func_name} with args: {func_args_dict}")
                 
                 result = self._execute_function_call(func_name, func_args_dict)
                 function_responses.append({
@@ -125,48 +122,47 @@ class OpenAIClient(BaseMultimodalModel):
                     "output": str(result)
                 })
                 logger.debug(f"Function {func_name} completed")
-            
-            # Add model's function call response to the input messages
-            # First, append the function calls themselves
-            self.payload["input"].append({
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": part} for part in text_parts]
-            })
-            
-            # Add the actual function call items to track what was called
-            for func_call in function_calls:
-                self.payload["input"].append(func_call)
-            
-            # Add function responses as user messages
-            self.payload["input"].extend(function_responses)
-            
-            # Make follow-up request with the updated payload
-            logger.debug("Making follow-up API request with function responses")
-            headers = self._build_headers()
-            endpoint = self._get_endpoint()
-            
-            try:
-                self.response = requests.post(endpoint, headers=headers, json=self.payload, timeout=600)
-                self.response.raise_for_status()
-                logger.debug("Follow-up API request successful")
-            except requests.exceptions.Timeout:
-                logger.error("Follow-up API request timed out")
-                raise Exception("API request timed out")
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Follow-up API request failed: {str(e)}")
-                raise
-            
-            # Extract final text response
-            final_response_json = self.response.json()
-            final_parts = final_response_json['output']
-            final_text_parts = []
-            
-            for part in final_parts:
-                if part.get('type') == 'message':
-                    content_items = part.get('content', [])
-                    for content_item in content_items:
-                        if content_item.get('type') == 'output_text':
-                            final_text_parts.append(content_item.get('text', ''))
+
+        # Get the previous response ID
+        previous_response_id = response_json.get('id')
+        if not previous_response_id:
+            logger.warning("No previous response ID found")
+            return
+        
+        # Create a NEW payload with only the function outputs
+        # This avoids repeating the entire conversation history
+        follow_up_payload = {
+            "previous_response_id": previous_response_id,  # This maintains context,
+            "model": self.model_identifier,
+            "input": function_responses,  # Only send the function outputs
+            "tools": self.tools
+        }
+        
+        # Copy over other parameters if they exist
+        if hasattr(self, 'temperature') and self.temperature >= 0:
+            follow_up_payload["temperature"] = self.temperature
+        
+        if hasattr(self, 'max_tokens') and self.max_tokens > 0:
+            follow_up_payload["max_output_tokens"] = self.max_tokens
+        
+        if self.reasoning_effort:
+            follow_up_payload["reasoning"] = {"effort": self.reasoning_effort}
+            follow_up_payload["reasoning"]["summary"] = "detailed"
+        
+        self.payload = follow_up_payload
+        
+        logger.debug("Making follow-up API request with function responses")
+        
+        try:
+            self.response = requests.post(self.endpoint, headers=self.headers, json=follow_up_payload, timeout=600)
+            self.response.raise_for_status()
+            logger.debug("Follow-up API request successful")
+        except requests.exceptions.Timeout:
+            logger.error("Follow-up API request timed out")
+            raise Exception("API request timed out")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Follow-up API request failed: {str(e)}")
+            raise
 
     def _extract_response_text(self, response: requests.Response) -> str:
         logger.debug("Extracting text from OpenAI response")
@@ -196,16 +192,38 @@ class OpenAIClient(BaseMultimodalModel):
             raise ValueError(f"Could not extract text from OpenAI v1/responses structure: {response_json}") from e
         
 
+class GPT4o_NoTools(OpenAIClient):
+    name = "GPT-4o"
+    model_identifier = "gpt-4o"
+    rate_limit = 4
+
+class GPT4o_mini_NoTools(OpenAIClient):
+    name = "GPT-4o-mini"
+    model_identifier = "gpt-4o-mini"
+    rate_limit = 6
+
 class GPT4o(OpenAIClient):
     name = "GPT-4o"
     model_identifier = "gpt-4o"
-    rate_limit = 3
+    rate_limit = 4
 
     tools = [{"type": "web_search_preview"}]
+
+class O3(OpenAIClient):
+    name = "o3"
+    model_identifier = "o3"
+    rate_limit = 4
+    max_tokens = -1
+    temperature = -1
+
+    reasoning_effort = "medium"
+
+    tools = TOOLS_BASIC
+
 class O3high(OpenAIClient):
     name = "o3-high"
     model_identifier = "o3"
-    rate_limit = 2
+    rate_limit = 4
     reasoning_effort = "high"
     detail = "high"
     max_tokens = -1

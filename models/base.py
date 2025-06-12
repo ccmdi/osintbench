@@ -22,13 +22,6 @@ def get_image_media_type(image_path: str) -> str:
     else:
         return "image/jpeg" # Default fallback
 
-def encode_image(image_path: str) -> tuple[str, str]:
-    """Encode image to base64 and return with media type."""
-    media_type = get_image_media_type(image_path)
-    with open(image_path, "rb") as img_file:
-        img_data = base64.b64encode(img_file.read()).decode("utf-8")
-    return img_data, media_type
-
 class BaseMultimodalModel(ABC):
     """Abstract base class for multimodal models."""
     api_key_name: str = None
@@ -47,6 +40,13 @@ class BaseMultimodalModel(ABC):
         if not self.model_identifier:
              raise NotImplementedError(f"model_identifier must be set in {self.name}")
         self.api_key = api_key
+
+    def encode_image(self, image_path: str) -> tuple[str, str]:
+        """Encode image to base64 and return with media type."""
+        media_type = get_image_media_type(image_path)
+        with open(image_path, "rb") as img_file:
+            img_data = base64.b64encode(img_file.read()).decode("utf-8")
+        return img_data, media_type
 
     def _build_headers(self) -> dict: 
         """Build request headers specific to the client."""
@@ -71,6 +71,9 @@ class BaseMultimodalModel(ABC):
 
     def get_tools(self) -> List[str]:
         """Get the tools for the model."""
+        if not self.tools:
+            return []
+        
         return [tool.get('name') for tool in self.tools]
 
     def _execute_function_call(self, function_name: str, function_args: dict) -> dict:
@@ -184,7 +187,7 @@ class BaseMultimodalModel(ABC):
 
         def api():
             if case:
-                encoded_images = [encode_image(image_path) for image_path in case.images]
+                encoded_images = [self.encode_image(image_path) for image_path in case.images]
                 logger.debug(f"Encoded {len(encoded_images)} images")
             else:
                 encoded_images = []

@@ -25,7 +25,7 @@ class AnthropicClient(BaseMultimodalModel):
         super().__init__(*args, **kwargs)
         self.rate_limiter = TokenRateLimiter(max_tokens_per_minute=35000) # Tier 2 input requirements
 
-    def _encode_image(self, image_path: str, max_file_size: int = 4 * 1024 * 1024) -> tuple[str, str]:
+    def encode_image(self, image_path: str, max_file_size: int = 4 * 1024 * 1024) -> tuple[str, str]:
         """Encode image with downscaling."""
         logger.debug(f"Encoding image: {image_path} (max size: {max_file_size} bytes)")
         media_type = get_image_media_type(image_path)
@@ -278,20 +278,6 @@ class AnthropicClient(BaseMultimodalModel):
                 "cache_read_tokens": usage.get("cache_read_input_tokens", 0)
             }
         return {}
-    
-    # def get_rate_limit_status(self) -> dict:
-    #     """Get current rate limit status."""
-    #     with self.rate_limiter.lock:
-    #         current_time = time.time()
-    #         current_usage = self.rate_limiter._get_current_usage(current_time)
-            
-    #         return {
-    #             "current_usage": current_usage,
-    #             "limit": self.rate_limiter.max_tokens_per_minute,
-    #             "remaining": max(0, self.rate_limiter.max_tokens_per_minute - current_usage),
-    #             "usage_percentage": (current_usage / self.rate_limiter.max_tokens_per_minute) * 100,
-    #             "window_seconds": self.rate_limiter.window_seconds
-    #         }
 
 
 class Claude3_7SonnetThinking(AnthropicClient):
@@ -300,6 +286,7 @@ class Claude3_7SonnetThinking(AnthropicClient):
     enable_thinking = True
     rate_limit = 2
     beta_header = "interleaved-thinking-2025-05-14,extended-cache-ttl-2025-04-11"
+    cache = True
 
     tools = TOOLS_BASIC
 
@@ -308,8 +295,6 @@ class Claude4SonnetThinking_NoTools(AnthropicClient):
     model_identifier = "claude-sonnet-4-20250514"
     enable_thinking = True
     rate_limit = 2
-    beta_header = "extended-cache-ttl-2025-04-11"
-    cache = True
 
 class Claude4SonnetThinking_ServerWebSearch(AnthropicClient):
     name = "Claude 4 Sonnet (Thinking)"
