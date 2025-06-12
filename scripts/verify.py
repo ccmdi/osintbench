@@ -94,28 +94,40 @@ def main():
     if not os.path.exists(csv_path):
         print(f"Error: {csv_path} not found")
         return 1
+
+    # Load existing summary data if it exists
+    summary_data = {}
+    if os.path.exists(summary_path):
+        with open(summary_path, 'r') as f:
+            try:
+                summary_data = json.load(f)
+            except json.JSONDecodeError:
+                print(f"Warning: Could not decode existing summary.json at {summary_path}. It will be overwritten.")
     
     print(f"Reverifying results from {csv_path}")
     
     try:
         results = compile_results_from_csv(csv_path, run_folder)
         
+        # Update summary data with new results
+        summary_data.update(results)
+
         # Save updated summary
         os.makedirs(os.path.dirname(summary_path), exist_ok=True)
         with open(summary_path, "w") as f:
-            json.dump(results, f, indent=2)
+            json.dump(summary_data, f, indent=2)
         
         print(f"Updated summary saved to {summary_path}")
         print("\nResults:")
-        print(f"Total samples: {results['n']}")
-        print(f"Total tasks: {results['total_tasks']}")
-        print(f"Refusal rate: {results['refusal_rate']:.2%}")
-        print(f"Location accuracy: {results['location_accuracy']:.3f}")
-        print(f"Identification accuracy: {results['identification_accuracy']:.3f}")
-        print(f"Temporal accuracy: {results['temporal_accuracy']:.3f}")
-        print(f"Analysis accuracy: {results['analysis_accuracy']:.3f}")
-        print(f"Overall accuracy: {results['overall_accuracy']:.3f}")
-        print(f"Task accuracy: {results['task_accuracy']:.3f}")
+        print(f"Total samples: {summary_data['n']}")
+        print(f"Total tasks: {summary_data['total_tasks']}")
+        print(f"Refusal rate: {summary_data['refusal_rate']:.2%}")
+        print(f"Location accuracy: {summary_data['location_accuracy']:.3f}")
+        print(f"Identification accuracy: {summary_data['identification_accuracy']:.3f}")
+        print(f"Temporal accuracy: {summary_data['temporal_accuracy']:.3f}")
+        print(f"Analysis accuracy: {summary_data['analysis_accuracy']:.3f}")
+        print(f"Overall accuracy: {summary_data['overall_accuracy']:.3f}")
+        print(f"Task accuracy: {summary_data['task_accuracy']:.3f}")
         
         return 0
         
