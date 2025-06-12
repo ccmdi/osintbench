@@ -5,6 +5,7 @@ OSINTbench is a benchmark for evaluating how well large language models can perf
 * **Analysis**: General reasoning
 
 # **[Leaderboard](https://osintbench.org)**
+![](img/leaderboard.png)
 
 # Installation
 ```bash
