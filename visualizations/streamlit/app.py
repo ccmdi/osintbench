@@ -5,8 +5,12 @@ from PIL import Image
 import pandas as pd
 import matplotlib.pyplot as plt
 import math
+import html as htmlmod
+import folium
+from streamlit_folium import st_folium
 
-# Function to load metadata
+
+@st.cache_data
 def load_metadata(dataset_folder_path):
     metadata_path = os.path.join(dataset_folder_path, "metadata.json")
     if os.path.exists(metadata_path):
@@ -22,6 +26,7 @@ def get_case_by_id(metadata, case_id):
     return None
 
 # Function to get available response runs for a dataset
+@st.cache_data
 def get_response_runs(dataset_name):
     responses_dir = "responses"
     if not os.path.exists(responses_dir):
@@ -33,25 +38,17 @@ def get_response_runs(dataset_name):
             continue
         folder_path = os.path.join(responses_dir, folder)
         if os.path.isdir(folder_path):
-            # Parse folder name: {model_name}_{dataset}_{timestamp}
             parts = folder.split('_')
             if len(parts) >= 3:
-                # Check if this run is for the current dataset
-                # Look for dataset name in the folder name
                 if dataset_name in folder:
-                    # Create compact display name
-                    # Extract model name (everything before dataset name)
                     model_part = folder.split(f'_{dataset_name}_')[0]
-                    # Extract timestamp (everything after dataset name)
                     timestamp_part = folder.split(f'_{dataset_name}_')[1] if f'_{dataset_name}_' in folder else parts[-1]
                     
-                    # Abbreviate common model names
                     model_compact = model_part.replace('Gemini 2.5 Flash Preview', 'Gemini 2.5 Flash') \
-                                              .replace('Gemini 2.5 Pro', 'Gemini 2.5 Pro') \
-                                              .replace('GPT-4', 'GPT-4') \
-                                              .replace('Claude', 'Claude')
+                                            .replace('Gemini 2.5 Pro', 'Gemini 2.5 Pro') \
+                                            .replace('GPT-4', 'GPT-4') \
+                                            .replace('Claude', 'Claude')
                     
-                    # Format timestamp more compactly (from 2025-06-01T12_50_38 to 06/01 12:50)
                     try:
                         if 'T' in timestamp_part:
                             date_part, time_part = timestamp_part.split('T')
@@ -59,9 +56,9 @@ def get_response_runs(dataset_name):
                             hour, minute = time_part.replace('_', ':').split(':')[:2]
                             compact_time = f"{month}/{day} {hour}:{minute}"
                         else:
-                            compact_time = timestamp_part[:10]  # fallback
+                            compact_time = timestamp_part[:10]
                     except:
-                        compact_time = timestamp_part[:10]  # fallback to first 10 chars
+                        compact_time = timestamp_part[:10]
                     
                     display_name = f"{model_compact} • {compact_time}"
                     
@@ -69,14 +66,14 @@ def get_response_runs(dataset_name):
                         'folder': folder,
                         'display_name': display_name,
                         'path': folder_path,
-                        'original_name': folder.replace('_', ' ')  # Keep original for tooltips if needed
+                        'original_name': folder.replace('_', ' ')
                     })
     
     return sorted(runs, key=lambda x: x['folder'], reverse=True)
 
 # Function to get available case IDs for a specific model run
+@st.cache_data
 def get_available_case_ids_for_run(run_path):
-    """Get list of case IDs that have output files in the given run"""
     if not run_path:
         return []
     
@@ -88,15 +85,15 @@ def get_available_case_ids_for_run(run_path):
     for filename in os.listdir(output_dir):
         if filename.endswith('.txt'):
             try:
-                # Extract case ID from filename (e.g., "11.txt" -> 11)
                 case_id = int(os.path.splitext(filename)[0])
                 case_ids.append(case_id)
             except ValueError:
-                continue  # Skip files that don't have numeric names
+                continue
     
     return sorted(case_ids)
 
 # Function to load model response for a case
+@st.cache_data
 def load_model_response(run_path, case_id):
     output_file = os.path.join(run_path, "output", f"{case_id}.txt")
     if os.path.exists(output_file):
@@ -108,6 +105,7 @@ def load_model_response(run_path, case_id):
     return None
 
 # Function to load judge response for a case
+@st.cache_data
 def load_judge_response(run_path, case_id):
     judge_file = os.path.join(run_path, "judge", f"{case_id}.txt")
     if os.path.exists(judge_file):
@@ -119,6 +117,7 @@ def load_judge_response(run_path, case_id):
     return None
 
 # Function to load scores from detailed.csv
+@st.cache_data
 def load_detailed_scores(run_path):
     csv_file = os.path.join(run_path, "results", "detailed.csv")
     if os.path.exists(csv_file):
@@ -134,29 +133,35 @@ def get_case_task_score(scores_df, case_id, task_id):
     if scores_df is None:
         return None
     
-    # The CSV uses case_id and task_id columns
     if 'case_id' in scores_df.columns and 'task_id' in scores_df.columns and 'score' in scores_df.columns:
-        # Filter by case_id and task_id
-        matching_rows = scores_df[(scores_df['case_id'] == case_id) & (scores_df['task_id'] == task_id)]
-        if not matching_rows.empty:
-            return matching_rows.iloc[0]['score']
+        # Convert to integers for comparison to handle string/int mismatches
+        try:
+            case_id_int = int(case_id) if case_id is not None else None
+            task_id_int = int(task_id) if task_id is not None else None
+            
+            if case_id_int is not None and task_id_int is not None:
+                matching_rows = scores_df[(scores_df['case_id'] == case_id_int) & (scores_df['task_id'] == task_id_int)]
+                if not matching_rows.empty:
+                    return matching_rows.iloc[0]['score']
+        except (ValueError, TypeError):
+            # If conversion fails, try string comparison
+            matching_rows = scores_df[(scores_df['case_id'] == case_id) & (scores_df['task_id'] == task_id)]
+            if not matching_rows.empty:
+                return matching_rows.iloc[0]['score']
     
     return None
 
 # Function to parse location from model response
 def parse_location_from_response(response_text):
-    """Try to extract lat/lng coordinates from model response"""
     if not response_text:
         return None
     
     lines = response_text.strip().split('\n')
     lat, lng = None, None
     
-    # Look for lat/lng patterns - check lines in reverse order as coordinates are often at the end
     for line in reversed(lines):
         line = line.strip()
         
-        # Handle various coordinate formats
         if line.startswith('lat:') or line.startswith('latitude:'):
             try:
                 lat = float(line.split(':')[1].strip())
@@ -168,7 +173,6 @@ def parse_location_from_response(response_text):
             except (ValueError, IndexError):
                 continue
         
-        # Also check for patterns like "lat: 39.6265" without additional text
         if line.lower().startswith('lat') and ':' in line:
             try:
                 lat_str = line.split(':')[1].strip()
@@ -188,9 +192,10 @@ def parse_location_from_response(response_text):
     
     return None
 
+# --- Main App ---
+
 st.set_page_config(layout="wide")
 
-# Custom CSS to make sidebar wider and disable map interaction
 st.markdown("""
 <style>
     .css-1d391kg {
@@ -213,54 +218,68 @@ st.markdown("""
 
 st.title("Dataset viewer")
 
-# Sidebar for dataset selection and case navigation
+query_params = st.query_params
+qp_dataset_raw = query_params.get('dataset', None)
+if isinstance(qp_dataset_raw, list):
+    qp_dataset = qp_dataset_raw[0] if qp_dataset_raw else None
+else:
+    qp_dataset = qp_dataset_raw
+qp_view = query_params.get('view', [None])
+qp_case_id = query_params.get('case_id', [None])
+qp_model_run = query_params.get('model_run', None)
+
 st.sidebar.header("Navigation")
 dataset_base_path = "dataset"
 available_datasets = [d for d in os.listdir(dataset_base_path) if os.path.isdir(os.path.join(dataset_base_path, d)) and not d.startswith('.')]
 
-selected_dataset_name = st.sidebar.selectbox("Select Dataset", available_datasets)
+if qp_dataset in available_datasets:
+    dataset_default_idx = available_datasets.index(qp_dataset)
+else:
+    dataset_default_idx = 0
+selected_dataset_name = st.sidebar.selectbox("Select Dataset", available_datasets, index=dataset_default_idx)
 
 if selected_dataset_name:
     selected_dataset_path = os.path.join(dataset_base_path, selected_dataset_name)
     metadata = load_metadata(selected_dataset_path)
 
     if metadata:
-        # Get available response runs for this dataset
         response_runs = get_response_runs(selected_dataset_name)
+
+        if qp_model_run:
+            selected_run = next(run for run in response_runs if run['original_name'] == qp_model_run)
+        else:
+            selected_run = None
         
-        # Response dropdown (only show if there are runs available)
-        selected_run = None
         if response_runs:
             st.sidebar.header("Model Responses")
             run_options = ["None (Ground Truth Only)"] + [run['display_name'] for run in response_runs]
-            selected_run_name = st.sidebar.selectbox("Select Model Run", run_options)
+            selected_run_name = st.sidebar.selectbox("Select Model Run", run_options, index=run_options.index(selected_run['display_name']) if selected_run else 0)
             
             if selected_run_name != "None (Ground Truth Only)":
                 selected_run = next(run for run in response_runs if run['display_name'] == selected_run_name)
         
-        # Add mode selection
+        view_modes = ["Browse Cases", "View All Locations", "Task Distribution", "Response Matrix"]
+        if qp_view in view_modes:
+            view_default_idx = view_modes.index(qp_view)
+        else:
+            view_default_idx = 0
         view_mode = st.sidebar.radio(
             "View Mode",
-            ["Browse Cases", "View All Locations", "Task Distribution"],
-            index=0
+            view_modes,
+            index=view_default_idx
         )
         
         if view_mode == "Browse Cases":
-            # Get all case IDs from metadata
             all_case_ids = [case.get("id") for case in metadata.get("cases", []) if case.get("id") is not None]
             
-            # Filter case IDs based on selected model run
             if selected_run:
-                # Only show cases that this model run actually processed
                 available_case_ids = get_available_case_ids_for_run(selected_run['path'])
-                # Filter to only include cases that exist in both metadata and model output
                 case_ids = [cid for cid in available_case_ids if cid in all_case_ids]
                 
                 if not case_ids:
                     st.sidebar.warning(f"No cases found for the selected model run.")
                     st.warning(f"The selected model run '{selected_run['display_name']}' has no processed cases.")
             else:
-                # No model selected, show all cases from metadata
                 case_ids = all_case_ids
             
             if not case_ids:
@@ -268,13 +287,17 @@ if selected_dataset_name:
                     st.sidebar.warning("No cases found in the selected dataset's metadata.json.")
                     st.warning(f"No cases (or cases with IDs) found in {selected_dataset_name}/metadata.json")
             else:
-                selected_case_id_str = st.sidebar.radio("Select Case ID", [str(cid) for cid in sorted(case_ids)])
+                case_id_strs = [str(cid) for cid in sorted(case_ids)]
+                if qp_case_id in case_id_strs:
+                    case_default_idx = case_id_strs.index(qp_case_id)
+                else:
+                    case_default_idx = 0
+                selected_case_id_str = st.sidebar.radio("Select Case ID", case_id_strs, index=case_default_idx)
                 selected_case_id = int(selected_case_id_str)
                 
                 case_data = get_case_by_id(metadata, selected_case_id)
 
                 if case_data:
-                    # Load model response, judge response, and scores if a run is selected
                     model_response = None
                     judge_response = None
                     scores_df = None
@@ -283,7 +306,6 @@ if selected_dataset_name:
                         judge_response = load_judge_response(selected_run['path'], selected_case_id)
                         scores_df = load_detailed_scores(selected_run['path'])
                     
-                    # Main area to display images and JSON
                     col1, spacer, col2 = st.columns([2, 0.15, 2])
 
                     with col1:
@@ -291,11 +313,7 @@ if selected_dataset_name:
                             for img_path_suffix in case_data["images"]:
                                 full_img_path = os.path.join(selected_dataset_path, img_path_suffix)
                                 if os.path.exists(full_img_path):
-                                    try:
-                                        image = Image.open(full_img_path)
-                                        st.image(image, caption=os.path.basename(full_img_path), use_container_width=True)
-                                    except Exception as e:
-                                        st.error(f"Error loading image {os.path.basename(full_img_path)}: {e}")
+                                    st.image(full_img_path, caption=os.path.basename(full_img_path), use_container_width=True)
                                 else:
                                     st.warning(f"Image not found: {full_img_path}")
                         else:
@@ -308,14 +326,12 @@ if selected_dataset_name:
                             st.write(case_data["info"])
                             st.markdown("---")
 
-                        # Show model response if available
                         if model_response:
                             st.subheader("🤖 Model Response")
                             with st.expander(f"Response from {selected_run['display_name']}", expanded=True):
                                 st.text_area("Raw Response", model_response, height=200)
                             st.markdown("---")
 
-                        # Show judge response if available
                         if judge_response:
                             st.subheader("⚖️ Judge Response")
                             with st.expander(f"Judge evaluation for {selected_run['display_name']}", expanded=False):
@@ -324,18 +340,16 @@ if selected_dataset_name:
 
                         if case_data.get("tasks"):
                             for i, task in enumerate(case_data["tasks"]):
-                                task_id = task.get("id")  # Get the actual task ID
+                                task_id = task.get("id")
                                 st.markdown(f"### Task {i+1}")
                                 if task.get("type"):
                                     st.markdown(f"**Type:** {task['type']}")
                                 if task.get("prompt"):
                                     st.markdown(f"**Prompt:** {task['prompt']}")
                                 
-                                # Show score if available
                                 if scores_df is not None and task_id is not None:
                                     score = get_case_task_score(scores_df, selected_case_id, task_id)
                                     if score is not None:
-                                        # Color code the score
                                         if isinstance(score, (int, float)):
                                             if score >= 0.8:
                                                 st.success(f"**Score:** {score}")
@@ -355,64 +369,90 @@ if selected_dataset_name:
                                 if task.get("note"):
                                     st.markdown(f"**Note:** {task['note']}")
                                 st.markdown("---")
-                    
-                    # Map section for location tasks
+                        
                     location_tasks = [task for task in case_data.get("tasks", []) if task.get("type") == "location" and task.get("answer")]
                     model_location = None
-                    if model_response:  # Check for model location regardless of whether there are ground truth location tasks
+                    if model_response:
                         model_location = parse_location_from_response(model_response)
                     
                     if location_tasks or model_location:
                         st.markdown("---")
                         st.header("Task Locations")
                         
-                        map_data = []
+                        map_points = []
                         
-                        # Add ground truth locations
                         for i, task in enumerate(location_tasks):
                             answer = task.get("answer", {})
                             if isinstance(answer, dict) and "lat" in answer and "lng" in answer:
                                 try:
                                     lat = float(answer["lat"])
                                     lng = float(answer["lng"])
-                                    map_data.append({
+                                    map_points.append({
                                         "lat": lat,
                                         "lon": lng,
-                                        "task": f"Ground Truth - Task {case_data['tasks'].index(task) + 1}",
-                                        "color": [255, 0, 0, 200]  # Red with transparency
+                                        "tooltip": f"Ground Truth - Task {case_data['tasks'].index(task) + 1}",
+                                        "color": "red",
+                                        "icon": "flag"
                                     })
                                 except (ValueError, TypeError):
                                     continue
                         
-                        # Add model prediction location if available
                         if model_location and selected_run:
-                            map_data.append({
+                            map_points.append({
                                 "lat": model_location["lat"],
                                 "lon": model_location["lng"],
-                                "task": f"Model Prediction - {selected_run['display_name']}",
-                                "color": [0, 100, 255, 200]  # Blue with transparency
+                                "tooltip": f"Model Prediction",
+                                "color": "blue",
+                                "icon": "dot-circle"
                             })
                         
-                        if map_data:
-                            map_df = pd.DataFrame(map_data)
-                            st.map(map_df, size=10000, color="color", zoom=6)
-                        
-                        # Show distance if both ground truth and model prediction exist
-                        if len(map_data) >= 2 and any("Ground Truth" in p['task'] for p in map_data) and any("Model Prediction" in p['task'] for p in map_data):
-                            ground_truth = next(p for p in map_data if "Ground Truth" in p['task'])
-                            model_pred = next(p for p in map_data if "Model Prediction" in p['task'])
+                        if map_points:
+                            # Use the average of points as the initial map center
+                            avg_lat = sum(p['lat'] for p in map_points) / len(map_points)
+                            avg_lon = sum(p['lon'] for p in map_points) / len(map_points)
+
+                            m = folium.Map(
+                                location=[avg_lat, avg_lon], 
+                                zoom_start=6,
+                                scrollWheelZoom=False, 
+                                dragging=False,
+                                zoom_control=False,
+                                tiles=None,
+                                attributionControl=False
+                            )
+                            folium.TileLayer(
+                                tiles='https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+                                attr=' ',
+                                name='CartoDB Dark Matter',
+                                control=False
+                            ).add_to(m)
                             
-                            # Calculate distance using Haversine formula (simple approximation)
+                            for point in map_points:
+                                folium.Marker(
+                                    [point['lat'], point['lon']], 
+                                    tooltip=point['tooltip'], 
+                                    icon=folium.Icon(color=point['color'], icon=point['icon'], prefix='fa')
+                                ).add_to(m)
+
+                            # Auto-fit map to all markers
+                            if len(map_points) > 1:
+                                bounds = [[p['lat'], p['lon']] for p in map_points]
+                                m.fit_bounds(bounds, padding=(30, 30))
+
+                            st_folium(m, use_container_width=True, height=400, returned_objects=[])
+
+                        if len(map_points) >= 2 and any("Ground Truth" in p['tooltip'] for p in map_points) and any("Model Prediction" in p['tooltip'] for p in map_points):
+                            ground_truth = next(p for p in map_points if "Ground Truth" in p['tooltip'])
+                            model_pred = next(p for p in map_points if "Model Prediction" in p['tooltip'])
+                            
                             def haversine_distance(lat1, lon1, lat2, lon2):
-                                # Convert latitude and longitude from degrees to radians
                                 lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
                                 
-                                # Haversine formula
                                 dlat = lat2 - lat1
                                 dlon = lon2 - lon1
                                 a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
                                 c = 2 * math.asin(math.sqrt(a))
-                                r = 6371  # Radius of earth in kilometers
+                                r = 6371
                                 return c * r
                             
                             distance = haversine_distance(
@@ -428,9 +468,9 @@ if selected_dataset_name:
                                 st.error(f"📏 **Distance:** {distance:.2f} km")
                 else:
                     st.error(f"Case ID {selected_case_id} not found in metadata.")
+        
         elif view_mode == "View All Locations":
-            # Implement "View All Locations" functionality
-            st.header("🗺️ All Location Tasks")
+            st.header("All Location Tasks")
             
             all_locations = []
             for case in metadata.get("cases", []):
@@ -454,14 +494,32 @@ if selected_dataset_name:
                                 continue
             
             if all_locations:
-                # Create DataFrame for the map
-                map_df = pd.DataFrame(all_locations)
-                st.map(map_df)
+                # Use a reasonable default center (world center) and let fit_bounds handle the actual view
+                m = folium.Map(location=[20, 0], zoom_start=2, tiles=None, attributionControl=False)
+                folium.TileLayer(
+                    tiles='https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+                    attr=' ',
+                    name='CartoDB Dark Matter',
+                    control=False
+                ).add_to(m)
+
+                for loc in all_locations:
+                    folium.Marker(
+                        [loc['lat'], loc['lon']],
+                        icon=folium.Icon(color='blue', icon='dot-circle', prefix='fa'),
+                        tooltip=f"Case {loc['case_id']}, Task {loc['task_num']}"
+                    ).add_to(m)
+
+                # Auto-fit map to all markers
+                bounds = [[loc['lat'], loc['lon']] for loc in all_locations]
+                m.fit_bounds(bounds, padding=(30, 30))
+
+                # This map is for exploration, so we keep it interactive
+                st_folium(m, use_container_width=True, height=500)
                 
                 st.markdown("---")
                 st.subheader("Location Details")
                 
-                # Display location details in a table
                 for i, loc in enumerate(all_locations):
                     with st.expander(f"Case {loc['case_id']}, Task {loc['task_num']} - {loc['lat']:.6f}, {loc['lon']:.6f}"):
                         st.write(f"**Task Prompt:** {loc['prompt']}")
@@ -469,10 +527,80 @@ if selected_dataset_name:
                         st.write(f"**Coordinates:** {loc['lat']}, {loc['lon']}")
             else:
                 st.info(f"No location tasks found in the {selected_dataset_name} dataset.")
-        else:  # Task Distribution
+        
+        elif view_mode == "Response Matrix":
+            st.header("Response Matrix")
+            if not response_runs:
+                st.info("No model runs found for this dataset.")
+            else:
+                # Group tasks by case
+                case_task_groups = {}
+                for case in metadata.get("cases", []):
+                    case_id = case.get("id")
+                    if case_id is not None:
+                        case_task_groups[case_id] = []
+                        for task_idx, task in enumerate(case.get("tasks", [])):
+                            task_id = task.get("id")
+                            case_task_groups[case_id].append({
+                                "task_id": task_id,
+                                "task_idx": task_idx
+                            })
+                
+                run_data = []
+                for run in response_runs:
+                    scores_df = load_detailed_scores(run['path'])
+                    run_data.append({
+                        "run": run,
+                        "scores_df": scores_df,
+                    })
+                
+                html = "<table style='border-collapse:collapse;width:100%;'>"
+                html += "<tr><th style='border:1px solid #ccc;padding:4px;'>Case</th><th style='border:1px solid #ccc;padding:4px;'>Task</th>"
+                for run in response_runs:
+                    html += f"<th style='border:1px solid #ccc;padding:4px;' title='{run['original_name']}'>" + run['display_name'] + "</th>"
+                html += "</tr>"
+                
+                for case_id in sorted(case_task_groups.keys()):
+                    tasks = case_task_groups[case_id]
+                    for i, task in enumerate(tasks):
+                        html += "<tr>"
+                        
+                        # Case column - only show on first task of each case
+                        if i == 0:
+                            rowspan = len(tasks)
+                            html += f"<td style='border:1px solid #ccc;padding:4px;' rowspan='{rowspan}'>C{case_id}</td>"
+                        
+                        # Task column
+                        html += f"<td style='border:1px solid #ccc;padding:4px;'>{task['task_idx']+1}</td>"
+                        
+                        # Score columns for each model run
+                        for run_idx, run in enumerate(response_runs):
+                            scores_df = run_data[run_idx]['scores_df']
+                            score = get_case_task_score(scores_df, case_id, task['task_id']) if scores_df is not None else None
+                            if score is None:
+                                color = '#eee'
+                            elif isinstance(score, (int, float)):
+                                if score >= 0.8:
+                                    color = '#b6fcb6'
+                                elif score >= 0.5:
+                                    color = '#fff7b2'
+                                else:
+                                    color = '#ffb2b2'
+                            else:
+                                color = '#eee'
+                            
+                            # Create clickable link for the score
+                            case_link = f"?dataset={selected_dataset_name}&view=Browse%20Cases&case_id={case_id}&model_run={run['original_name']}"
+                            score_disp = f"<a href='{case_link}' style='color:#222;font-weight:bold;text-decoration:none;'>{score:.2f}</a>" if isinstance(score, (int, float)) else ""
+                            html += f"<td style='border:1px solid #ccc;padding:4px;background:{color};vertical-align:top;'>{score_disp}</td>"
+                        
+                        html += "</tr>"
+                
+                html += "</table>"
+                st.markdown(html, unsafe_allow_html=True)
+        else: # Task Distribution
             st.header("📊 Task Type Distribution")
             
-            # Analyze all tasks across all cases
             task_counts = {}
             total_tasks = 0
             total_cases = len(metadata.get("cases", []))
@@ -485,7 +613,6 @@ if selected_dataset_name:
                     task_type = task.get("type", "unknown")
                     task_counts[task_type] = task_counts.get(task_type, 0) + 1
             
-            # Display summary statistics
             col1, col2, col3 = st.columns(3)
             with col1:
                 st.metric("Total Cases", total_cases)
@@ -497,13 +624,10 @@ if selected_dataset_name:
             if task_counts:
                 st.markdown("---")
                 
-                # Display pie chart
                 st.subheader("Task Type Distribution")
                 
-                # Create DataFrame explicitly
                 df = pd.DataFrame(list(task_counts.items()), columns=['Task Type', 'Count'])
                 
-                # Center the chart in a smaller column
                 col1, col2, col3 = st.columns([1, 2, 1])
                 with col2:
                     fig, ax = plt.subplots(figsize=(3, 3))
@@ -511,7 +635,6 @@ if selected_dataset_name:
                     ax.axis('equal')
                     st.pyplot(fig)
                 
-                # Show percentages
                 st.subheader("Breakdown")
                 for task_type, count in sorted(task_counts.items(), key=lambda x: x[1], reverse=True):
                     percentage = (count / total_tasks) * 100
