@@ -112,6 +112,32 @@ class OsintBenchmark:
             cases_to_test = [case for case in self.cases if case.case_id == args.sample_id]
             if not cases_to_test:
                 raise ValueError(f"Case ID '{args.sample_id}' not found in dataset")
+        elif getattr(args, 'from', None) is not None:
+            from_arg = getattr(args, 'from')
+            
+            # Parse range or single ID
+            if ':' in from_arg:
+                try:
+                    from_id, to_id = map(int, from_arg.split(':'))
+                    if from_id > to_id:
+                        raise ValueError(f"Invalid range: start ID ({from_id}) must be <= end ID ({to_id})")
+                    cases_to_test = [case for case in self.cases if from_id <= case.case_id <= to_id]
+                    if not cases_to_test:
+                        raise ValueError(f"No cases found with ID in range {from_id}:{to_id}")
+                    logger.info(f"Testing cases from ID {from_id} to {to_id} ({len(cases_to_test)} cases)")
+                except ValueError as e:
+                    if "invalid literal" in str(e):
+                        raise ValueError(f"Invalid range format '{from_arg}'. Use format like '5:10'")
+                    raise
+            else:
+                try:
+                    from_id = int(from_arg)
+                    cases_to_test = [case for case in self.cases if case.case_id >= from_id]
+                    if not cases_to_test:
+                        raise ValueError(f"No cases found with ID >= {from_id}")
+                    logger.info(f"Testing cases from ID {from_id} to end ({len(cases_to_test)} cases)")
+                except ValueError:
+                    raise ValueError(f"Invalid ID format '{from_arg}'. Use a number or range like '5:10'")
         elif args.samples and args.samples < len(self.cases):
             import random
             cases_to_test = random.sample(self.cases, args.samples)
@@ -286,6 +312,7 @@ if __name__ == "__main__":
     parser.add_argument("--samples", "-n", type=int, default=None,
                         help="Number of samples to test (default: all)")
     parser.add_argument("--sample-id", "-i", type=int, default=None, help="Run a specific sample by ID")
+    parser.add_argument("--from", "-f", type=str, default=None, help="Start from a specific sample ID and run to the end, or specify a range like '5:10'")
     parser.add_argument("--model", "-m", type=str, help="Model to use")
     parser.add_argument("--max-retries", type=int, default=3,
                         help="Maximum number of retries for API/network errors (default: 3)")
