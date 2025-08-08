@@ -51,6 +51,7 @@ class AnthropicClient(BaseMultimodalModel):
                 if media_type == 'image/png':
                     current_img.save(img_buffer, format='PNG', optimize=True)
                 else:
+                    media_type = 'image/jpeg'
                     current_img.save(img_buffer, format='JPEG', quality=quality, optimize=True)
                 
                 img_size = img_buffer.tell()
@@ -98,11 +99,12 @@ class AnthropicClient(BaseMultimodalModel):
         logger.debug(f"Building Anthropic payload with {len(text_content)} text items and {len(encoded_images) if encoded_images else 0} images")
         content = []
         # Text
+        cache_count = 0
         for text in text_content:
             text_block = {"type": "text", "text": text}
-            if self.cache:
+            if self.cache and cache_count < 4:
                 text_block["cache_control"] = {"type": "ephemeral"}
-            
+                cache_count += 1
             content.append(text_block)
         
         # Images
@@ -117,8 +119,9 @@ class AnthropicClient(BaseMultimodalModel):
                     }
                 }
 
-                if self.cache:
+                if self.cache and cache_count < 4:
                     image_block["cache_control"] = {"type": "ephemeral"}
+                    cache_count += 1
                 content.append(image_block)
 
         payload = {
@@ -142,7 +145,7 @@ class AnthropicClient(BaseMultimodalModel):
             logger.debug(f"Added {len(self.tools)} tools to payload")
         
         if self.enable_thinking:
-            payload["thinking"] = {"type": "enabled", "budget_tokens": self.max_tokens - 32000}
+            payload["thinking"] = {"type": "enabled", "budget_tokens": 32000}
             if "temperature" in payload:
                 del payload["temperature"]
             logger.debug("Enabled thinking mode")
@@ -300,7 +303,7 @@ class Claude4SonnetThinking_ServerWebSearch(AnthropicClient):
     name = "Claude 4 Sonnet (Thinking)"
     model_identifier = "claude-sonnet-4-20250514"
     enable_thinking = True
-    rate_limit = 0.2
+    rate_limit = 1
     beta_header = "interleaved-thinking-2025-05-14,extended-cache-ttl-2025-04-11"
     cache = True
 
@@ -310,7 +313,7 @@ class Claude4SonnetThinking(AnthropicClient):
     name = "Claude 4 Sonnet (Thinking)"
     model_identifier = "claude-sonnet-4-20250514"
     enable_thinking = True
-    rate_limit = 0.2
+    rate_limit = 1
     beta_header = "interleaved-thinking-2025-05-14,extended-cache-ttl-2025-04-11"
     cache = True
 
@@ -321,7 +324,8 @@ class Claude4OpusThinking_ServerWebSearch(AnthropicClient):
     name = "Claude 4 Opus (Thinking)"
     model_identifier = "claude-opus-4-20250514"
     enable_thinking = True
-    rate_limit = 0.2
+    rate_limit = 1
+    max_tokens = 32000
     beta_header = "interleaved-thinking-2025-05-14,extended-cache-ttl-2025-04-11"
     cache = True
 
@@ -330,8 +334,9 @@ class Claude4OpusThinking_ServerWebSearch(AnthropicClient):
 class Claude4OpusThinking(AnthropicClient):
     name = "Claude 4 Opus (Thinking)"
     model_identifier = "claude-opus-4-20250514"
+    max_tokens = 32000
     enable_thinking = True
-    rate_limit = 0.2
+    rate_limit = 1
     beta_header = "interleaved-thinking-2025-05-14,extended-cache-ttl-2025-04-11"
     cache = True
 

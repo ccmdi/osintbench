@@ -230,6 +230,16 @@ class O3high(OpenAIClient):
     temperature = -1
     tools = [{"type": "web_search_preview"}]
 
+class GPT5high(OpenAIClient):
+    name = "GPT-5 (high)"
+    model_identifier = "gpt-5"
+    rate_limit = 4
+    reasoning_effort = "high"
+    detail = "high"
+    max_tokens = -1
+    temperature = -1
+    tools = TOOLS_BASIC
+
 class O4minihigh(OpenAIClient):
     name = "o4-mini-high"
     model_identifier = "o4-mini"
