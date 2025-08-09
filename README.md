@@ -77,6 +77,7 @@ Models go by their class name in `models.py`. Gemini 2.5 Flash goes by `Gemini2_
     - [x] Visit website
     - [x] Overpass turbo
     - [x] Google Street View
+    - [ ] Computer use (as replacement; long-term)
 - [ ] **High quality, human-verified datasets**
 - [ ] Higher prompt quality to improve performance
 - [ ] Prompt batching/parallel runs
