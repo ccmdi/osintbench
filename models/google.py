@@ -195,8 +195,8 @@ class Gemini2_5Pro0605(GoogleClient):
     
     tools = [{"function_declarations": TOOLS_BASIC}]
 class Gemini2_5Flash(GoogleClient):
-    name = "Gemini 2.5 Flash Preview"
-    model_identifier = "gemini-2.5-flash-preview-04-17"
+    name = "Gemini 2.5 Flash"
+    model_identifier = "gemini-2.5-flash"
     rate_limit = 2
     api_version_path = "v1beta"
 
