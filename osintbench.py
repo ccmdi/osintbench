@@ -6,12 +6,15 @@ from dataclasses import dataclass
 import datetime
 import argparse
 from dotenv import load_dotenv
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+import time
 
 from scripts.eval import evaluate_answer, get_parser
 from models import *
 from prompt import get_prompt
 from util import setup_logging, get_logger
-from context import set_case, set_dataset_path, set_benchmark
+from context import set_case, set_dataset_path, set_benchmark, get_case
 
 load_dotenv()
 
@@ -146,11 +149,34 @@ class OsintBenchmark:
             logger.info(f"Testing all {len(self.cases)} cases")
                 
         self.results = []
+        self._results_lock = threading.Lock()
         
-        for i, case in enumerate(cases_to_test, 1):
-            logger.announcement(f"Testing case {i}/{len(cases_to_test)}")
-            set_case(case)
-            self._evaluate_case(case, run_folder)
+        if args.parallel > 1:
+            logger.info(f"Running {len(cases_to_test)} cases with {args.parallel} parallel workers")
+            
+            def process_case(case):
+                set_case(case)  # context.py handles thread-local storage
+                set_benchmark(self)  # Set benchmark context for this thread
+                set_dataset_path(self.dataset_path)  # Set dataset path for tools
+                self._evaluate_case(case, run_folder)
+            
+            with ThreadPoolExecutor(max_workers=args.parallel) as executor:
+                futures = [executor.submit(process_case, case) for case in cases_to_test]
+                for i, future in enumerate(as_completed(futures), 1):
+                    try:
+                        future.result()
+                        logger.announcement(f"Completed case {i}/{len(cases_to_test)}")
+                    except Exception as e:
+                        logger.error(f"Error in parallel execution: {e}")
+        else:
+            for i, case in enumerate(cases_to_test, 1):
+                logger.announcement(f"Testing case {i}/{len(cases_to_test)}")
+                set_case(case)
+                self._evaluate_case(case, run_folder)
+                self.save_results(run_folder + "/results/")
+        
+        # Save results once at the end for parallel execution
+        if args.parallel > 1:
             self.save_results(run_folder + "/results/")
         
         logger.info("All cases completed, compiling results")
@@ -185,7 +211,8 @@ class OsintBenchmark:
                             evaluation=evaluation
                         )
 
-                        self.results.append(result)
+                        with self._results_lock:
+                            self.results.append(result)
                         
                         if result.refused:
                             logger.warning(f"Task {task.task_id} refused: {result.error_message}")
@@ -209,13 +236,16 @@ class OsintBenchmark:
                                 refused=True,
                                 error_message=f"Format error: {str(parse_error)}"
                             )
-                            self.results.append(error_result)
+                            with self._results_lock:
+                                self.results.append(error_result)
                         logger.error(f"Case {case.case_id} failed with parse error (no retry)")
                         return  # Don't retry for format errors
                 
             except Exception as e:
+                # import traceback
                 error_msg = str(e)
                 logger.warning(f"API/network error for case {case.case_id} (attempt {attempt+1}): {error_msg}")
+                # logger.debug(f"Full traceback for case {case.case_id}: {traceback.format_exc()}")
                 if attempt < self.max_retries - 1:
                     logger.info(f"Retrying case {case.case_id}...")
                     continue
@@ -233,7 +263,8 @@ class OsintBenchmark:
                         refused=True,
                         error_message=error_msg
                     )
-                    self.results.append(error_result)
+                    with self._results_lock:
+                        self.results.append(error_result)
                 return
     
     def _compile_results(self) -> Dict:        
@@ -316,9 +347,11 @@ if __name__ == "__main__":
     parser.add_argument("--model", "-m", type=str, help="Model to use")
     parser.add_argument("--max-retries", type=int, default=3,
                         help="Maximum number of retries for API/network errors (default: 3)")
-    parser.add_argument("--log-level", type=str, default="INFO", 
-                        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-                        help="Logging level (default: INFO)")
+    parser.add_argument("--log-level", type=str, default="FUNCTION_CALL", 
+                        choices=["DEBUG", "FUNCTION_CALL", "INFO", "WARNING", "ERROR"],
+                        help="Logging level (default: FUNCTION_CALL)")
+    parser.add_argument("--parallel", "-p", type=int, default=1, choices=range(1, 6),
+                        help="Number of cases to run in parallel (default: 1, max: 5)")
     args = parser.parse_args()
     
     dataset_path = f"dataset/{args.dataset}"
@@ -334,7 +367,13 @@ if __name__ == "__main__":
     runtime = datetime.datetime.now().strftime('%Y-%m-%dT%H_%M_%S')
     run_folder = f"responses/{benchmark.model.name}_{args.dataset}_{runtime}"
     
-    log_file = setup_logging(run_folder, args.log_level)
+    # Adjust log level for parallel execution to reduce verbosity
+    log_level = args.log_level
+    if args.parallel > 1 and log_level == "FUNCTION_CALL":
+        log_level = "INFO"  # Hide function calls but show everything else
+        print(f"Hiding function calls for parallel execution with {args.parallel} workers")
+    
+    log_file = setup_logging(run_folder, log_level)
     
     logger.announcement(f"Starting OSINT Benchmark - Model: {benchmark.model.name}, Dataset: {args.dataset}, Tools: {len(benchmark.model.get_tools())}")
     logger.info(f"Run folder: {run_folder}")
