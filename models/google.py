@@ -117,7 +117,9 @@ class GoogleClient(BaseMultimodalModel):
                 try:
                     if attempt > 0:
                         logger.info(f"Retrying follow-up request (attempt {attempt + 1}/{max_attempts})")
-                    
+
+                    # Google endpoints aren't very reliable, though 300 seconds is giving the benefit of the doubt
+                    # TODO streaming
                     self.response = requests.post(self.endpoint, headers=self.headers, json=self.payload, timeout=(5, 300))
                     self.response.raise_for_status()
                     logger.debug("Follow-up API request successful")
