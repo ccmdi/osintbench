@@ -1,5 +1,5 @@
 from util import get_logger
-from context import get_dataset_path
+from context import get_dataset_path, set_dataset_path
 
 import requests
 import trafilatura
@@ -582,7 +582,7 @@ def reverse_image_search(image_path: str, use_cache: bool = True) -> list:
         logger.debug(f"Using absolute path: {image_path_abs}")
 
         chrome_options = Options()
-        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--headless=new")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-gpu")
@@ -832,3 +832,9 @@ TOOLS_BASIC_FULL = TOOLS_BASIC + [
 TOOLS_ADVANCED = TOOLS_BASIC_FULL + [
     OVERPASS_TURBO_TOOL
 ]
+
+if __name__ == "__main__":
+    # your tool tests here
+
+    set_dataset_path("dataset/name")
+    reverse_image_search("1.jpg")
