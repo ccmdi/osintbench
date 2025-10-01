@@ -53,7 +53,7 @@ class OpenRouterClient(BaseMultimodalModel):
 
         # Add tools if available
         if self.tools:
-            # Convert tools to OpenRouter format (OpenAI-compatible)
+            # Convert tools to OpenRouter format
             openrouter_tools = []
             for tool in self.tools:
                 openrouter_tool = {

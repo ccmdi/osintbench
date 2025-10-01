@@ -20,8 +20,6 @@ EXIF data can also contain useful information about images, which you can access
 
 You can also use the geocode tool to get the coordinates of a location or verify information about a location, generally.
 
-Finally, you can use the street view tool to get a visual confirmation of a location. A successful query of street view is only useful if you compare the resulting image to the real image, and perform basic spatial and visual analysis to determine if they match (in location tasks, for instance).
-
 Take your time and as many tool calls as you need to reason through evidence and clues to be as sure and precise as possible. Consider context and spatial relations when necessary (e.g. to pinpoint a location exactly).
 """
 
@@ -30,6 +28,10 @@ OVERPASS_TURBO_INSTRUCTIONS = """
 Overpass Turbo is a powerful tool, but should be used in cases where you expect less than 100 results. Otherwise, the interpreter may time out. Good for adjacency queries (e.g. bus stops within 100 meters of a department store).
 If you have a sneaking suspicion from other accumulated evidence or the information given, and want to verify some fact of geospatial relation, Overpass Turbo is a good resource.
 Be aware of it's limitations: if you do not find something on Overpass Turbo, it does not mean it isn't there. Your query simply may have failed to capture it.
+"""
+
+STREETVIEW_INSTRUCTIONS = """
+Finally, you can use the street view tool to get a visual confirmation of a location. A successful query of street view is only useful if you compare the resulting image to the real image, and perform basic spatial and visual analysis to determine if they match (in location tasks, for instance).
 """
 
 SYSTEM_PROMPT_PRESTRUCTURE = """

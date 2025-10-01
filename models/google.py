@@ -203,3 +203,15 @@ class Gemini2_5Flash(GoogleClient):
     api_version_path = "v1beta"
 
     tools = [{"function_declarations": TOOLS_BASIC}]
+class Gemini2_5Flash09(GoogleClient):
+    name = "Gemini 2.5 Flash 09-2025"
+    model_identifier = "gemini-2.5-flash-preview-09-2025"
+    rate_limit = 2  
+    api_version_path = "v1beta"
+    tools = [{"function_declarations": TOOLS_BASIC}]
+class Gemini2_5FlashLite09(GoogleClient):
+    name = "Gemini 2.5 Flash Lite 09-2025"
+    model_identifier = "gemini-2.5-flash-lite-preview-09-2025"
+    rate_limit = 2
+    api_version_path = "v1beta"
+    tools = [{"function_declarations": TOOLS_BASIC}]

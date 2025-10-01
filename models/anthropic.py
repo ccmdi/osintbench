@@ -99,30 +99,26 @@ class AnthropicClient(BaseMultimodalModel):
         logger.debug(f"Building Anthropic payload with {len(text_content)} text items and {len(encoded_images) if encoded_images else 0} images")
         content = []
         # Text
-        cache_count = 0
         for text in text_content:
             text_block = {"type": "text", "text": text}
-            if self.cache and cache_count < 4:
-                text_block["cache_control"] = {"type": "ephemeral"}
-                cache_count += 1
             content.append(text_block)
-        
+
         # Images
         if encoded_images:
             for img_data, media_type in encoded_images:
                 image_block = {
-                    "type": "image", 
+                    "type": "image",
                     "source": {
-                        "type": "base64", 
-                        "media_type": media_type, 
+                        "type": "base64",
+                        "media_type": media_type,
                         "data": img_data
                     }
                 }
-
-                if self.cache and cache_count < 4:
-                    image_block["cache_control"] = {"type": "ephemeral"}
-                    cache_count += 1
                 content.append(image_block)
+
+        # Cache the last block if caching is enabled
+        if self.cache and content:
+            content[-1]["cache_control"] = {"type": "ephemeral"}
 
         payload = {
             "model": self.model_identifier,
@@ -188,16 +184,24 @@ class AnthropicClient(BaseMultimodalModel):
             
             #TODO: ordering
             assistant_content = thinking_parts + function_calls
-            
+
+            # Cache the last block of assistant content if caching is enabled
+            if self.cache and assistant_content:
+                assistant_content[-1]["cache_control"] = {"type": "ephemeral"}
+
             # Text + thinking history
             self.payload["messages"].append({
                 "content": assistant_content,
                 "role": "assistant"
             })
-            
+
+            # Cache the last block of function responses if caching is enabled
+            if self.cache and function_responses:
+                function_responses[-1]["cache_control"] = {"type": "ephemeral"}
+
             # Function response history
             self.payload["messages"].append({
-                "content": function_responses, 
+                "content": function_responses,
                 "role": "user"
             })
             
@@ -335,6 +339,16 @@ class Claude4OpusThinking(AnthropicClient):
     name = "Claude 4 Opus (Thinking)"
     model_identifier = "claude-opus-4-20250514"
     max_tokens = 32000
+    enable_thinking = True
+    rate_limit = 1
+    beta_header = "interleaved-thinking-2025-05-14,extended-cache-ttl-2025-04-11"
+    cache = True
+
+    tools = TOOLS_BASIC
+
+class Claude4_5SonnetThinking(AnthropicClient):
+    name = "Claude 4.5 Sonnet (Thinking)"
+    model_identifier = "claude-sonnet-4-5"
     enable_thinking = True
     rate_limit = 1
     beta_header = "interleaved-thinking-2025-05-14,extended-cache-ttl-2025-04-11"

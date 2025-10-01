@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 class TokenRateLimiter:
     """Tracks token usage over a sliding 60-second window and enforces rate limits."""
     
-    def __init__(self, max_tokens_per_minute: int = 35000, window_seconds: int = 60):
+    def __init__(self, max_tokens_per_minute: int = 60000, window_seconds: int = 60):
         self.max_tokens_per_minute = max_tokens_per_minute
         self.window_seconds = window_seconds
         self.token_history = deque()  # (timestamp, token_count) tuples
@@ -70,7 +70,7 @@ class TokenRateLimiter:
         """Rough estimation of input tokens for a payload."""
         total_tokens = 0
         
-        # Tools schema tokens (from your docs: ~346 tokens base + tool definitions)
+        # Tools schema tokens
         if payload.get("tools"):
             total_tokens += 346  # Base tool system prompt
             for tool in payload["tools"]:
