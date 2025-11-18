@@ -33,33 +33,98 @@ def get_exif_data(image_path: str) -> dict:
             return None
 
 def google_web_search(query: str, limit: int = 10) -> list:
-    import requests
+    """
+    Search the web using DuckDuckGo (renamed from google_web_search for compatibility)
+    """
     from bs4 import BeautifulSoup
-    from googlesearch import search
-    
-    try:
-        results = []
-        for i, url in enumerate(search(query, num_results=limit, sleep_interval=1)):
-            title = f"Result {i+1}"  # Fallback
+    import urllib.parse
 
+    logger.function_call(f"Performing DuckDuckGo search for: {query}")
+
+    try:
+        # Build DuckDuckGo search URL
+        params = {
+            'q': query,
+            'kl': 'us-en'  # Region/language
+        }
+        search_url = f"https://html.duckduckgo.com/html/?{urllib.parse.urlencode(params)}"
+
+        # Headers to mimic a real browser
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Referer': 'https://duckduckgo.com/'
+        }
+
+        # Make the request
+        response = requests.get(search_url, headers=headers, timeout=10)
+        response.raise_for_status()
+
+        print(response.text)
+
+        # Parse the HTML
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        results = []
+
+        # DuckDuckGo HTML results are in divs with class 'result'
+        search_results = soup.find_all('div', class_='result')
+
+        logger.debug(f"Found {len(search_results)} search results")
+
+        for result in search_results[:limit]:
             try:
-                response = requests.get(url, timeout=5, headers={
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                # Extract title and URL
+                title_tag = result.find('a', class_='result__a')
+                if not title_tag:
+                    continue
+
+                title = title_tag.get_text(strip=True)
+                redirect_url = title_tag.get('href', '')
+
+                # DuckDuckGo uses redirect URLs - extract actual URL from uddg parameter
+                if 'uddg=' in redirect_url:
+                    actual_url = urllib.parse.unquote(redirect_url.split('uddg=')[1].split('&')[0])
+                else:
+                    actual_url = redirect_url
+
+                # Extract description
+                desc_tag = result.find('a', class_='result__snippet')
+                description = desc_tag.get_text(strip=True) if desc_tag else ''
+
+                # Skip if no valid URL
+                if not actual_url.startswith('http'):
+                    continue
+
+                results.append({
+                    'title': title[:200],
+                    'url': actual_url,
+                    'description': description[:300]
                 })
-                soup = BeautifulSoup(response.text, 'html.parser')
-                title_tag = soup.find('title')
-                if title_tag:
-                    title = title_tag.get_text().strip()[:200]  # Limit length
-            except:
-                pass  # Keep fallback title
-            
-            results.append({
-                'title': title,
-                'url': url,
-                'description': ''
-            })
+
+                logger.debug(f"Extracted result {len(results)}: {title[:50]}...")
+
+            except Exception as e:
+                logger.warning(f"Error parsing search result: {e}")
+                continue
+
+        if not results:
+            logger.warning("No results found")
+            return [{"error": "No results found - try a different search query"}]
+
+        logger.function_call(f"Successfully extracted {len(results)} search results")
         return results
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Request error during DuckDuckGo search: {e}")
+        return [{"error": f"Request failed: {str(e)}"}]
     except Exception as e:
+        logger.error(f"Error performing DuckDuckGo search: {e}")
         return [{"error": str(e)}]
 
 def visit_website(url: str) -> dict:
@@ -836,9 +901,14 @@ TOOLS_ADVANCED = TOOLS_BASIC_FULL + [
 ]
 
 if __name__ == "__main__":
-    # your tool tests here
+    import json
 
     set_dataset_path("dataset/basic")
     # reverse_image_search("1.jpg")
     result = google_web_search("1933 Double Eagle Langbord family lawsuit attorney appeal")
-    print(result)
+
+    # Pretty print to file
+    with open("search_results.json", "w", encoding="utf-8") as f:
+        json.dump(result, f, indent=2, ensure_ascii=False)
+
+    print(f"Wrote {len(result)} results to search_results.json")

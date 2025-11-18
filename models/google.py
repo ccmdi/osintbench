@@ -215,3 +215,9 @@ class Gemini2_5FlashLite09(GoogleClient):
     rate_limit = 2
     api_version_path = "v1beta"
     tools = [{"function_declarations": TOOLS_BASIC}]
+class Gemini3_0ProPreview(GoogleClient):
+    name = "Gemini 3.0 Pro Preview"
+    model_identifier = "gemini-3-pro-preview"
+    rate_limit = 4
+    api_version_path = "v1beta"
+    tools = [{"function_declarations": TOOLS_BASIC}]
