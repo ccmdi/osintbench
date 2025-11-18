@@ -838,5 +838,7 @@ TOOLS_ADVANCED = TOOLS_BASIC_FULL + [
 if __name__ == "__main__":
     # your tool tests here
 
-    set_dataset_path("dataset/name")
-    reverse_image_search("1.jpg")
+    set_dataset_path("dataset/basic")
+    # reverse_image_search("1.jpg")
+    result = google_web_search("1933 Double Eagle Langbord family lawsuit attorney appeal")
+    print(result)

@@ -95,6 +95,27 @@ class AnthropicClient(BaseMultimodalModel):
             logger.debug(f"Added beta header: {self.beta_header}")
         return headers
 
+    def _apply_cache_to_last_block(self, payload: dict) -> None:
+        """Apply cache_control to the last content block in the entire conversation."""
+        if not self.cache:
+            return
+
+        # First, strip all existing cache_control markers
+        for message in payload["messages"]:
+            content = message.get("content", [])
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and "cache_control" in block:
+                        del block["cache_control"]
+
+        # Then mark only the last block
+        for message in reversed(payload["messages"]):
+            content = message.get("content", [])
+            if content:
+                content[-1]["cache_control"] = {"type": "ephemeral"}
+                logger.debug(f"Applied cache_control to last block in {message['role']} message")
+                return
+
     def _build_payload(self, text_content: List[str], encoded_images: List[Tuple[str, str]] = None) -> dict:
         logger.debug(f"Building Anthropic payload with {len(text_content)} text items and {len(encoded_images) if encoded_images else 0} images")
         content = []
@@ -116,16 +137,15 @@ class AnthropicClient(BaseMultimodalModel):
                 }
                 content.append(image_block)
 
-        # Cache the last block if caching is enabled
-        if self.cache and content:
-            content[-1]["cache_control"] = {"type": "ephemeral"}
-
         payload = {
             "model": self.model_identifier,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
             "messages": [{"role": "user", "content": content}]
         }
+
+        # Apply caching to the last block of the entire conversation
+        self._apply_cache_to_last_block(payload)
 
         if self.tools:
             payload["tools"] = [
@@ -185,26 +205,21 @@ class AnthropicClient(BaseMultimodalModel):
             #TODO: ordering
             assistant_content = thinking_parts + function_calls
 
-            # Cache the last block of assistant content if caching is enabled
-            if self.cache and assistant_content:
-                assistant_content[-1]["cache_control"] = {"type": "ephemeral"}
-
             # Text + thinking history
             self.payload["messages"].append({
                 "content": assistant_content,
                 "role": "assistant"
             })
 
-            # Cache the last block of function responses if caching is enabled
-            if self.cache and function_responses:
-                function_responses[-1]["cache_control"] = {"type": "ephemeral"}
-
             # Function response history
             self.payload["messages"].append({
                 "content": function_responses,
                 "role": "user"
             })
-            
+
+            # Apply caching to the last block of the entire conversation
+            self._apply_cache_to_last_block(self.payload)
+
             # Apply rate limiting
             self.rate_limiter.apply(self.payload)
 
