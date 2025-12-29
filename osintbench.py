@@ -5,13 +5,14 @@ from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 import datetime
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 
 from scripts.eval import evaluate_answer, get_parser
 from models import *
 from prompt import get_prompt
 from util import setup_logging, get_logger
-from context import set_case, set_dataset_path, set_benchmark
+from context import set_case, set_dataset_path, set_benchmark, get_benchmark
 
 load_dotenv()
 
@@ -146,28 +147,79 @@ class OsintBenchmark:
             logger.info(f"Testing all {len(self.cases)} cases")
                 
         self.results = []
-        
-        for i, case in enumerate(cases_to_test, 1):
-            logger.announcement(f"Testing case {i}/{len(cases_to_test)}")
-            set_case(case)
-            self._evaluate_case(case, run_folder)
-            self.save_results(run_folder + "/results/")
-        
+
+        if args.parallel and args.parallel > 1:
+            self._run_parallel(cases_to_test, run_folder, args.parallel)
+        else:
+            self._run_sequential(cases_to_test, run_folder)
+
         logger.info("All cases completed, compiling results")
         return self._compile_results()
+
+    def _run_sequential(self, cases: List[Case], run_folder: str) -> None:
+        """Run cases sequentially."""
+        for i, case in enumerate(cases, 1):
+            logger.announcement(f"Testing case {i}/{len(cases)}")
+            set_case(case)
+            case_results = self._evaluate_case(case, run_folder)
+            self.results.extend(case_results)
+            self.save_results(run_folder + "/results/")
+
+    def _run_parallel(self, cases: List[Case], run_folder: str, max_workers: int) -> None:
+        """Run cases in parallel with proper thread-local context."""
+        logger.info(f"Running {len(cases)} cases in parallel with {max_workers} workers")
+
+        def worker(case: Case, case_index: int) -> List[BenchmarkResult]:
+            """Worker function that sets thread-local context before evaluation."""
+            # Each thread must set its own thread-local context
+            set_case(case)
+            set_dataset_path(self.dataset_path)
+            set_benchmark(self)
+
+            logger.announcement(f"Testing case {case_index}/{len(cases)} (case_id={case.case_id})")
+            return self._evaluate_case(case, run_folder)
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(worker, case, i): case
+                for i, case in enumerate(cases, 1)
+            }
+
+            for future in as_completed(futures):
+                case = futures[future]
+                try:
+                    case_results = future.result()
+                    self.results.extend(case_results)
+                except Exception as e:
+                    logger.error(f"Case {case.case_id} failed with exception: {e}")
+                    for task in case.tasks:
+                        self.results.append(BenchmarkResult(
+                            case_obj=case,
+                            task_id=task.task_id,
+                            task_type=task.type,
+                            answer=task.answer,
+                            parsed_answer=None,
+                            evaluation=None,
+                            refused=True,
+                            error_message=str(e)
+                        ))
+
+        self.save_results(run_folder + "/results/")
     
-    def _evaluate_case(self, case: Case, run_folder: str) -> None:
-        """Evaluates a case."""
+    def _evaluate_case(self, case: Case, run_folder: str) -> List[BenchmarkResult]:
+        """Evaluates a case and returns the results."""
+        results = []
+
         for attempt in range(self.max_retries):
             try:
                 logger.debug(f"Querying model for case {case.case_id} (attempt {attempt+1})")
                 response = self.model.query(get_prompt(case), run_folder)
-                
+
                 os.makedirs(f"{run_folder}/output/", exist_ok=True)
                 with open(f"{run_folder}/output/{case.case_id}.txt", "w", encoding="utf-8") as f:
                     f.write(response)
                 logger.debug(f"Saved response for case {case.case_id} to output file")
-                
+
                 try:
                     for task in case.tasks:
                         logger.debug(f"Processing task {task.task_id} ({task.type}) for case {case.case_id}")
@@ -177,30 +229,30 @@ class OsintBenchmark:
                         evaluation['parser'] = parser.__class__.__name__
 
                         result = BenchmarkResult(
-                            case_obj=case, 
-                            task_id=task.task_id, 
-                            task_type=task.type, 
-                            answer=task.answer, 
-                            parsed_answer=answer, 
+                            case_obj=case,
+                            task_id=task.task_id,
+                            task_type=task.type,
+                            answer=task.answer,
+                            parsed_answer=answer,
                             evaluation=evaluation
                         )
 
-                        self.results.append(result)
-                        
+                        results.append(result)
+
                         if result.refused:
                             logger.warning(f"Task {task.task_id} refused: {result.error_message}")
                         else:
                             logger.debug(f"Task {task.task_id} completed successfully")
-                    
+
                     logger.info(f"Case {case.case_id} completed successfully")
-                    return  # Success - all tasks processed
-                    
+                    return results
+
                 except ValueError as parse_error:
                     logger.warning(f"Parse error for case {case.case_id} (attempt {attempt+1}): {str(parse_error)}")
                     if "missing required fields" in str(parse_error) or "parse" in str(parse_error):
                         for task in case.tasks:
                             error_result = BenchmarkResult(
-                                case_obj=case, 
+                                case_obj=case,
                                 task_id=task.task_id,
                                 task_type=task.type,
                                 answer=task.answer,
@@ -209,32 +261,34 @@ class OsintBenchmark:
                                 refused=True,
                                 error_message=f"Format error: {str(parse_error)}"
                             )
-                            self.results.append(error_result)
+                            results.append(error_result)
                         logger.error(f"Case {case.case_id} failed with parse error (no retry)")
-                        return  # Don't retry for format errors
-                
+                        return results
+
             except Exception as e:
                 error_msg = str(e)
                 logger.warning(f"API/network error for case {case.case_id} (attempt {attempt+1}): {error_msg}")
                 if attempt < self.max_retries - 1:
                     logger.info(f"Retrying case {case.case_id}...")
                     continue
-                
+
                 # Final attempt failed - add error result for each task
                 logger.error(f"Case {case.case_id} failed after {self.max_retries} attempts")
                 for task in case.tasks:
                     error_result = BenchmarkResult(
-                        case_obj=case, 
+                        case_obj=case,
                         task_id=task.task_id,
                         task_type=task.type,
-                        answer=task.answer, 
+                        answer=task.answer,
                         parsed_answer=None,
                         evaluation=None,
                         refused=True,
                         error_message=error_msg
                     )
-                    self.results.append(error_result)
-                return
+                    results.append(error_result)
+                return results
+
+        return results
     
     def _compile_results(self) -> Dict:        
         total = len(self.results)
@@ -316,7 +370,9 @@ if __name__ == "__main__":
     parser.add_argument("--model", "-m", type=str, help="Model to use")
     parser.add_argument("--max-retries", type=int, default=3,
                         help="Maximum number of retries for API/network errors (default: 3)")
-    parser.add_argument("--log-level", type=str, default="INFO", 
+    parser.add_argument("--parallel", "-p", type=int, default=1,
+                        help="Number of parallel workers (default: 1, sequential)")
+    parser.add_argument("--log-level", type=str, default="INFO",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
                         help="Logging level (default: INFO)")
     args = parser.parse_args()
@@ -336,7 +392,8 @@ if __name__ == "__main__":
     
     log_file = setup_logging(run_folder, args.log_level)
     
-    logger.announcement(f"Starting OSINT Benchmark - Model: {benchmark.model.name}, Dataset: {args.dataset}, Tools: {len(benchmark.model.get_tools())}")
+    parallel_info = f", Parallel: {args.parallel}" if args.parallel > 1 else ""
+    logger.announcement(f"Starting OSINT Benchmark - Model: {benchmark.model.name}, Dataset: {args.dataset}, Tools: {len(benchmark.model.get_tools())}{parallel_info}")
     logger.info(f"Run folder: {run_folder}")
     logger.info(f"Log file: {log_file}")
     
