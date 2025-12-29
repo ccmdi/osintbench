@@ -204,6 +204,8 @@ class OsintBenchmark:
                             error_message=str(e)
                         ))
 
+        # Sort results by case_id then task_id for consistent ordering
+        self.results.sort(key=lambda r: (r.case_obj.case_id, r.task_id))
         self.save_results(run_folder + "/results/")
     
     def _evaluate_case(self, case: Case, run_folder: str) -> List[BenchmarkResult]:
