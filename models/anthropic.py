@@ -167,13 +167,13 @@ class AnthropicClient(BaseMultimodalModel):
             logger.debug("Enabled thinking mode")
         return payload
 
-    def _handle_function_calls(self, response_json: dict) -> None:
+    def _handle_function_calls(self, response_json: dict, state=None) -> None:
         parts = response_json['content']
 
         function_calls = []
         text_parts = []
         thinking_parts = []
-        
+
         for part in parts:
             if part.get('type') == 'tool_use':
                 function_calls.append(part)
@@ -185,7 +185,7 @@ class AnthropicClient(BaseMultimodalModel):
         # If there are function calls, execute them and continue the conversation
         if function_calls:
             logger.function_call(f"{len(function_calls)}: {function_calls}")
-            
+
             # Execute all function calls
             function_responses = []
             for func_call in function_calls:
@@ -193,7 +193,7 @@ class AnthropicClient(BaseMultimodalModel):
                 func_name = func_call['name']
                 func_args = func_call.get('input', {})
                 logger.debug(f"Calling {func_name} with args: {func_args}")
-                
+
                 result = self._execute_function_call(func_name, func_args)
                 function_responses.append({
                     "type": "tool_result",
@@ -201,36 +201,36 @@ class AnthropicClient(BaseMultimodalModel):
                     "content": str(result)
                 })
                 logger.debug(f"Function {func_name} completed")
-            
+
             #TODO: ordering
             assistant_content = thinking_parts + function_calls
 
             # Text + thinking history
-            self.payload["messages"].append({
+            state.payload["messages"].append({
                 "content": assistant_content,
                 "role": "assistant"
             })
 
             # Function response history
-            self.payload["messages"].append({
+            state.payload["messages"].append({
                 "content": function_responses,
                 "role": "user"
             })
 
             # Apply caching to the last block of the entire conversation
-            self._apply_cache_to_last_block(self.payload)
+            self._apply_cache_to_last_block(state.payload)
 
             # Apply rate limiting
-            self.rate_limiter.apply(self.payload)
+            self.rate_limiter.apply(state.payload)
 
             logger.debug("Making follow-up API request with function responses")
             try:
-                self.response = requests.post(self.endpoint, headers=self.headers, json=self.payload, timeout=600)
-                self.response.raise_for_status()
-                
-                input_tokens = self.get_token_usage(self.response).get("input_tokens", 0)
+                state.response = requests.post(state.endpoint, headers=state.headers, json=state.payload, timeout=600)
+                state.response.raise_for_status()
+
+                input_tokens = self.get_token_usage(state.response).get("input_tokens", 0)
                 self.rate_limiter.track(input_tokens)
-                
+
                 logger.debug("Follow-up API request successful")
             except requests.exceptions.Timeout:
                 logger.error("Follow-up API request timed out")

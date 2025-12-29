@@ -159,14 +159,19 @@ class BaseMultimodalModel(ABC):
                     except json.JSONDecodeError:
                         f.write(response_str)
 
-    def _save_conversation_state(self, run_folder: str):
+    def _save_conversation_state(self, run_folder: str, state=None):
         """Save current payload and response state."""
         case = get_case()
         if not (run_folder and case and case.case_id):
             return
-        
-        self.save_json(self.payload, run_folder, f"payload")
-        self.save_json(self.response, run_folder, f"response")
+
+        payload = state.payload if state else getattr(self, 'payload', None)
+        response = state.response if state else getattr(self, 'response', None)
+
+        if payload:
+            self.save_json(payload, run_folder, f"payload")
+        if response:
+            self.save_json(response, run_folder, f"response")
 
     @abstractmethod
     def _is_model_finished(self, response_json: dict) -> bool:
@@ -180,10 +185,20 @@ class BaseMultimodalModel(ABC):
         """
         logger.info(f"Starting query for model {self.name}")
         logger.debug(f"Prompt length: {len(prompt)} characters")
-        
+
         case = get_case()
         if case:
             logger.debug(f"Case has {len(case.images)} images")
+
+        # Thread-local state container to avoid race conditions in parallel execution
+        class RequestState:
+            def __init__(self):
+                self.headers = None
+                self.payload = None
+                self.endpoint = None
+                self.response = None
+
+        state = RequestState()
 
         def api():
             if case:
@@ -191,27 +206,27 @@ class BaseMultimodalModel(ABC):
                 logger.debug(f"Encoded {len(encoded_images)} images")
             else:
                 encoded_images = []
-            
-            self.headers = self._build_headers()
-            self.payload = self._build_payload([prompt], encoded_images)
-            self.endpoint = self._get_endpoint()
-            
-            logger.debug(f"Making API request to {self.endpoint}")
-            
+
+            state.headers = self._build_headers()
+            state.payload = self._build_payload([prompt], encoded_images)
+            state.endpoint = self._get_endpoint()
+
+            logger.debug(f"Making API request to {state.endpoint}")
+
             try:
-                self.response = requests.post(self.endpoint, headers=self.headers, json=self.payload)
-                self.response.raise_for_status()
+                state.response = requests.post(state.endpoint, headers=state.headers, json=state.payload)
+                state.response.raise_for_status()
                 logger.info(f"API request successful for {self.name}")
 
-                while not self._is_model_finished(self.response.json()):
+                while not self._is_model_finished(state.response.json()):
                     logger.debug("Model has not finished, continuing conversation with function calls")
-                    response_json = self.response.json()
-                    self._save_conversation_state(run_folder)
-                    self._handle_function_calls(response_json)
+                    response_json = state.response.json()
+                    self._save_conversation_state(run_folder, state)
+                    self._handle_function_calls(response_json, state)
 
-                self._save_conversation_state(run_folder)
-                
-                result = self._extract_response_text(self.response)
+                self._save_conversation_state(run_folder, state)
+
+                result = self._extract_response_text(state.response)
                 logger.info(f"Successfully extracted response text from {self.name}")
                 return result
             except requests.exceptions.RequestException as e:
