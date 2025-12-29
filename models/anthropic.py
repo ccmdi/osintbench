@@ -370,3 +370,13 @@ class Claude4_5SonnetThinking(AnthropicClient):
     cache = True
 
     tools = TOOLS_BASIC
+
+class Claude4_5OpusThinking(AnthropicClient):
+    name = "Claude 4.5 Opus (Thinking)"
+    model_identifier = "claude-opus-4-5"
+    enable_thinking = True
+    rate_limit = 1
+    beta_header = "interleaved-thinking-2025-05-14,extended-cache-ttl-2025-04-11"
+    cache = True
+
+    tools = TOOLS_BASIC
