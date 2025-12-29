@@ -53,7 +53,7 @@ class OpenRouterClient(BaseMultimodalModel):
 
         # Add tools if available
         if self.tools:
-            # Convert tools to OpenRouter format (OpenAI-compatible)
+            # Convert tools to OpenRouter format
             openrouter_tools = []
             for tool in self.tools:
                 openrouter_tool = {
@@ -98,20 +98,20 @@ class OpenRouterClient(BaseMultimodalModel):
             logger.warning(f"Error checking if model is finished: {e}, assuming finished")
             return True
 
-    def _handle_function_calls(self, response_json: dict) -> None:
+    def _handle_function_calls(self, response_json: dict, state=None) -> None:
         """Handle function calls in OpenRouter response format."""
         if not response_json.get("choices"):
             return
-        
+
         choice = response_json["choices"][0]
         message = choice.get("message", {})
         tool_calls = message.get("tool_calls", [])
-        
+
         if not tool_calls:
             return
-        
+
         logger.function_call(f"{len(tool_calls)}: {tool_calls}")
-        
+
         # Execute function calls
         function_responses = []
         for tool_call in tool_calls:
@@ -119,14 +119,14 @@ class OpenRouterClient(BaseMultimodalModel):
             function_data = tool_call.get("function", {})
             func_name = function_data.get("name")
             func_args = function_data.get("arguments", "{}")
-            
+
             try:
                 import json
                 func_args_dict = json.loads(func_args)
             except json.JSONDecodeError:
                 logger.error(f"Failed to parse function arguments: {func_args}")
                 func_args_dict = {}
-            
+
             result = self._execute_function_call(func_name, func_args_dict)
             function_responses.append({
                 "role": "tool",
@@ -135,11 +135,11 @@ class OpenRouterClient(BaseMultimodalModel):
                 "content": str(result.get("result", result))
             })
             logger.debug(f"Function {func_name} completed")
-        
+
         # Build new payload with conversation history
         # First, get current messages and add the assistant's response with tool calls
-        current_messages = self.payload.get("messages", [])
-        
+        current_messages = state.payload.get("messages", [])
+
         # Add the assistant's message with tool calls
         assistant_message = {
             "role": "assistant",
@@ -147,31 +147,31 @@ class OpenRouterClient(BaseMultimodalModel):
             "tool_calls": tool_calls
         }
         current_messages.append(assistant_message)
-        
+
         # Add the function responses
         current_messages.extend(function_responses)
-        
+
         # Create follow-up payload
         follow_up_payload = {
             "model": self.model_identifier,
             "messages": current_messages,
-            "tools": self.payload.get("tools", [])  # Keep the same tools
+            "tools": state.payload.get("tools", [])  # Keep the same tools
         }
-        
+
         # Copy over other parameters if they exist
-        if "temperature" in self.payload:
-            follow_up_payload["temperature"] = self.payload["temperature"]
-        
-        if "max_tokens" in self.payload:
-            follow_up_payload["max_tokens"] = self.payload["max_tokens"]
-        
-        self.payload = follow_up_payload
-        
+        if "temperature" in state.payload:
+            follow_up_payload["temperature"] = state.payload["temperature"]
+
+        if "max_tokens" in state.payload:
+            follow_up_payload["max_tokens"] = state.payload["max_tokens"]
+
+        state.payload = follow_up_payload
+
         logger.debug("Making follow-up API request with function responses")
-        
+
         try:
-            self.response = requests.post(self.endpoint, headers=self.headers, json=follow_up_payload, timeout=600)
-            self.response.raise_for_status()
+            state.response = requests.post(state.endpoint, headers=state.headers, json=follow_up_payload, timeout=600)
+            state.response.raise_for_status()
             logger.debug("Follow-up API request successful")
         except requests.exceptions.Timeout:
             logger.error("Follow-up API request timed out")

@@ -86,22 +86,22 @@ class OpenAIClient(BaseMultimodalModel):
             logger.warning(f"Error checking if model is finished: {e}, assuming finished")
             return True
 
-    def _handle_function_calls(self, response_json: dict) -> None:
+    def _handle_function_calls(self, response_json: dict, state=None) -> None:
         parts = response_json['output']
-        
+
         function_calls = []
-        
+
         for part in parts:
             if part.get('type') == 'function_call':
                 function_calls.append(part)
-        
+
         if not function_calls:
             return
-        
+
         # Execute function calls
         if function_calls:
             logger.function_call(f"{len(function_calls)}: {function_calls}")
-            
+
             function_responses = []
             for func_call in function_calls:
                 call_id = func_call.get('call_id')
@@ -114,7 +114,7 @@ class OpenAIClient(BaseMultimodalModel):
                 except json.JSONDecodeError:
                     logger.error(f"Failed to parse function arguments: {func_args}")
                     func_args_dict = {}
-                
+
                 result = self._execute_function_call(func_name, func_args_dict)
                 function_responses.append({
                     "type": "function_call_output",
@@ -128,7 +128,7 @@ class OpenAIClient(BaseMultimodalModel):
         if not previous_response_id:
             logger.warning("No previous response ID found")
             return
-        
+
         # Create a NEW payload with only the function outputs
         # This avoids repeating the entire conversation history
         follow_up_payload = {
@@ -137,25 +137,25 @@ class OpenAIClient(BaseMultimodalModel):
             "input": function_responses,  # Only send the function outputs
             "tools": self.tools
         }
-        
+
         # Copy over other parameters if they exist
         if hasattr(self, 'temperature') and self.temperature >= 0:
             follow_up_payload["temperature"] = self.temperature
-        
+
         if hasattr(self, 'max_tokens') and self.max_tokens > 0:
             follow_up_payload["max_output_tokens"] = self.max_tokens
-        
+
         if self.reasoning_effort:
             follow_up_payload["reasoning"] = {"effort": self.reasoning_effort}
             follow_up_payload["reasoning"]["summary"] = "detailed"
-        
-        self.payload = follow_up_payload
-        
+
+        state.payload = follow_up_payload
+
         logger.debug("Making follow-up API request with function responses")
-        
+
         try:
-            self.response = requests.post(self.endpoint, headers=self.headers, json=follow_up_payload, timeout=600)
-            self.response.raise_for_status()
+            state.response = requests.post(state.endpoint, headers=state.headers, json=follow_up_payload, timeout=600)
+            state.response.raise_for_status()
             logger.debug("Follow-up API request successful")
         except requests.exceptions.Timeout:
             logger.error("Follow-up API request timed out")

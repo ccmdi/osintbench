@@ -1,5 +1,5 @@
 from util import get_logger
-from context import get_dataset_path
+from context import get_dataset_path, set_dataset_path
 
 import requests
 import trafilatura
@@ -33,33 +33,37 @@ def get_exif_data(image_path: str) -> dict:
             return None
 
 def google_web_search(query: str, limit: int = 10) -> list:
-    import requests
-    from bs4 import BeautifulSoup
-    from googlesearch import search
-    
+    """
+    Search the web using DuckDuckGo (renamed from google_web_search for compatibility)
+    """
+    from ddgs import DDGS
+
+    logger.function_call(f"Performing DuckDuckGo search for: {query}")
+
     try:
         results = []
-        for i, url in enumerate(search(query, num_results=limit, sleep_interval=1)):
-            title = f"Result {i+1}"  # Fallback
 
-            try:
-                response = requests.get(url, timeout=5, headers={
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                })
-                soup = BeautifulSoup(response.text, 'html.parser')
-                title_tag = soup.find('title')
-                if title_tag:
-                    title = title_tag.get_text().strip()[:200]  # Limit length
-            except:
-                pass  # Keep fallback title
-            
+        ddgs = DDGS()
+        search_results = ddgs.text(query, max_results=limit)
+
+        for result in search_results:
             results.append({
-                'title': title,
-                'url': url,
-                'description': ''
+                'title': result.get('title', '')[:200],
+                'url': result.get('href', ''),
+                'description': result.get('body', '')[:300]
             })
+
+            logger.debug(f"Extracted result {len(results)}: {result.get('title', '')[:50]}...")
+
+        if not results:
+            logger.warning("No results found")
+            return [{"error": "No results found - try a different search query"}]
+
+        logger.function_call(f"Successfully extracted {len(results)} search results")
         return results
+
     except Exception as e:
+        logger.error(f"Error performing DuckDuckGo search: {e}")
         return [{"error": str(e)}]
 
 def visit_website(url: str) -> dict:
@@ -582,7 +586,7 @@ def reverse_image_search(image_path: str, use_cache: bool = True) -> list:
         logger.debug(f"Using absolute path: {image_path_abs}")
 
         chrome_options = Options()
-        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--headless=new")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-gpu")
@@ -824,11 +828,26 @@ TOOLS_BASIC = [
     GEOCODE_TOOL
 ]
 
+#TODO: expensive
 TOOLS_BASIC_FULL = TOOLS_BASIC + [
     VIEW_IMAGE_FROM_REVERSE_IMAGE_SEARCH_TOOL,
     SV_QUERY_TOOL
 ]
 
+#TODO: not useful (yet?)
 TOOLS_ADVANCED = TOOLS_BASIC_FULL + [
     OVERPASS_TURBO_TOOL
 ]
+
+if __name__ == "__main__":
+    import json
+
+    set_dataset_path("dataset/basic")
+    # reverse_image_search("1.jpg")
+    result = google_web_search("1933 Double Eagle Langbord family lawsuit attorney appeal")
+
+    # Pretty print to file
+    with open("search_results.json", "w", encoding="utf-8") as f:
+        json.dump(result, f, indent=2, ensure_ascii=False)
+
+    print(f"Wrote {len(result)} results to search_results.json")

@@ -68,29 +68,26 @@ class GoogleClient(BaseMultimodalModel):
 
         return payload
 
-    def _handle_function_calls(self, response_json: dict) -> None:
+    def _handle_function_calls(self, response_json: dict, state=None) -> None:
         logger.debug(response_json)
         parts = response_json['candidates'][0]['content']['parts']
-        
+
         function_calls = []
-        text_parts = []
-        
+
         for part in parts:
             if 'functionCall' in part:
                 function_calls.append(part['functionCall'])
-            elif 'text' in part:
-                text_parts.append(part['text'])
 
         if function_calls:
             logger.function_call(f"{len(function_calls)}: {function_calls}")
-            
+
             # Execute all function calls
             function_responses = []
             for func_call in function_calls:
                 func_name = func_call['name']
                 func_args = func_call.get('args', {})
                 logger.debug(f"Calling {func_name} with args: {func_args}")
-                
+
                 result = self._execute_function_call(func_name, func_args)
                 function_responses.append({
                     "functionResponse": {
@@ -99,17 +96,18 @@ class GoogleClient(BaseMultimodalModel):
                     }
                 })
                 logger.debug(f"Function {func_name} completed")
-            
-            self.payload["contents"].append({
-                "parts": [{"text": part} for part in text_parts] + [{"functionCall": fc} for fc in function_calls], 
+
+            # Preserve original parts with thought signatures intact
+            state.payload["contents"].append({
+                "parts": parts,
                 "role": "model"
             })
-            
-            self.payload["contents"].append({
-                "parts": function_responses, 
+
+            state.payload["contents"].append({
+                "parts": function_responses,
                 "role": "user"
             })
-            
+
             logger.debug("Making follow-up API request with function responses")
 
             max_attempts = 3
@@ -117,12 +115,14 @@ class GoogleClient(BaseMultimodalModel):
                 try:
                     if attempt > 0:
                         logger.info(f"Retrying follow-up request (attempt {attempt + 1}/{max_attempts})")
-                    
-                    self.response = requests.post(self.endpoint, headers=self.headers, json=self.payload, timeout=(5, 300))
-                    self.response.raise_for_status()
+
+                    # Google endpoints aren't very reliable, though 300 seconds is giving the benefit of the doubt
+                    # TODO streaming
+                    state.response = requests.post(state.endpoint, headers=state.headers, json=state.payload, timeout=(5, 300))
+                    state.response.raise_for_status()
                     logger.debug("Follow-up API request successful")
                     break
-                    
+
                 except requests.exceptions.Timeout:
                     if attempt < max_attempts - 1:
                         logger.warning(f"Follow-up API request timed out, will retry...")
@@ -130,7 +130,7 @@ class GoogleClient(BaseMultimodalModel):
                     else:
                         logger.error(f"Follow-up API request timed out after {max_attempts} attempts")
                         raise Exception(f"API request timed out after {max_attempts} attempts")
-                        
+
                 except requests.exceptions.RequestException as e:
                     logger.error(f"Follow-up API request failed: {str(e)}")
                     raise
@@ -200,4 +200,28 @@ class Gemini2_5Flash(GoogleClient):
     rate_limit = 2
     api_version_path = "v1beta"
 
+    tools = [{"function_declarations": TOOLS_BASIC}]
+class Gemini2_5Flash09(GoogleClient):
+    name = "Gemini 2.5 Flash 09-2025"
+    model_identifier = "gemini-2.5-flash-preview-09-2025"
+    rate_limit = 2  
+    api_version_path = "v1beta"
+    tools = [{"function_declarations": TOOLS_BASIC}]
+class Gemini2_5FlashLite09(GoogleClient):
+    name = "Gemini 2.5 Flash Lite 09-2025"
+    model_identifier = "gemini-2.5-flash-lite-preview-09-2025"
+    rate_limit = 2
+    api_version_path = "v1beta"
+    tools = [{"function_declarations": TOOLS_BASIC}]
+class Gemini3_0ProPreview(GoogleClient):
+    name = "Gemini 3.0 Pro Preview"
+    model_identifier = "gemini-3-pro-preview"
+    rate_limit = 4
+    api_version_path = "v1beta"
+    tools = [{"function_declarations": TOOLS_BASIC}]
+class Gemini3_0FlashPreview(GoogleClient):
+    name = "Gemini 3.0 Flash Preview"
+    model_identifier = "gemini-3-flash-preview"
+    rate_limit = 4
+    api_version_path = "v1beta"
     tools = [{"function_declarations": TOOLS_BASIC}]

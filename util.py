@@ -3,13 +3,13 @@ import os
 import colorlog
 
 # Custom logging levels
-FUNCTION_CALL_LEVEL = 25
+FUNCTION_CALL_LEVEL = 15
 logging.addLevelName(FUNCTION_CALL_LEVEL, 'FUNCTION_CALL')
 
-EVALUATION_LEVEL = 26
+EVALUATION_LEVEL = 25
 logging.addLevelName(EVALUATION_LEVEL, 'EVALUATION')
 
-ANNOUNCEMENT_LEVEL = 27
+ANNOUNCEMENT_LEVEL = 26
 logging.addLevelName(ANNOUNCEMENT_LEVEL, 'ANNOUNCEMENT')
 
 def function_call(self, message):
@@ -76,7 +76,17 @@ def setup_logging(run_folder: str, log_level: str = "INFO") -> str:
     
     # Console handler - user-specified level (with colors if available)
     console_handler = logging.StreamHandler()
-    console_handler.setLevel(getattr(logging, log_level.upper()))
+    
+    # Handle custom log levels
+    if log_level.upper() == "FUNCTION_CALL":
+        console_handler.setLevel(FUNCTION_CALL_LEVEL)
+    elif log_level.upper() == "EVALUATION":
+        console_handler.setLevel(EVALUATION_LEVEL)
+    elif log_level.upper() == "ANNOUNCEMENT":
+        console_handler.setLevel(ANNOUNCEMENT_LEVEL)
+    else:
+        console_handler.setLevel(getattr(logging, log_level.upper()))
+    
     console_handler.setFormatter(console_formatter)
     
     # Add handlers to root logger

@@ -95,33 +95,46 @@ class AnthropicClient(BaseMultimodalModel):
             logger.debug(f"Added beta header: {self.beta_header}")
         return headers
 
+    def _apply_cache_to_last_block(self, payload: dict) -> None:
+        """Apply cache_control to the last content block in the entire conversation."""
+        if not self.cache:
+            return
+
+        # First, strip all existing cache_control markers
+        for message in payload["messages"]:
+            content = message.get("content", [])
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and "cache_control" in block:
+                        del block["cache_control"]
+
+        # Then mark only the last block
+        for message in reversed(payload["messages"]):
+            content = message.get("content", [])
+            if content:
+                content[-1]["cache_control"] = {"type": "ephemeral"}
+                logger.debug(f"Applied cache_control to last block in {message['role']} message")
+                return
+
     def _build_payload(self, text_content: List[str], encoded_images: List[Tuple[str, str]] = None) -> dict:
         logger.debug(f"Building Anthropic payload with {len(text_content)} text items and {len(encoded_images) if encoded_images else 0} images")
         content = []
         # Text
-        cache_count = 0
         for text in text_content:
             text_block = {"type": "text", "text": text}
-            if self.cache and cache_count < 4:
-                text_block["cache_control"] = {"type": "ephemeral"}
-                cache_count += 1
             content.append(text_block)
-        
+
         # Images
         if encoded_images:
             for img_data, media_type in encoded_images:
                 image_block = {
-                    "type": "image", 
+                    "type": "image",
                     "source": {
-                        "type": "base64", 
-                        "media_type": media_type, 
+                        "type": "base64",
+                        "media_type": media_type,
                         "data": img_data
                     }
                 }
-
-                if self.cache and cache_count < 4:
-                    image_block["cache_control"] = {"type": "ephemeral"}
-                    cache_count += 1
                 content.append(image_block)
 
         payload = {
@@ -130,6 +143,9 @@ class AnthropicClient(BaseMultimodalModel):
             "max_tokens": self.max_tokens,
             "messages": [{"role": "user", "content": content}]
         }
+
+        # Apply caching to the last block of the entire conversation
+        self._apply_cache_to_last_block(payload)
 
         if self.tools:
             payload["tools"] = [
@@ -151,13 +167,13 @@ class AnthropicClient(BaseMultimodalModel):
             logger.debug("Enabled thinking mode")
         return payload
 
-    def _handle_function_calls(self, response_json: dict) -> None:
+    def _handle_function_calls(self, response_json: dict, state=None) -> None:
         parts = response_json['content']
 
         function_calls = []
         text_parts = []
         thinking_parts = []
-        
+
         for part in parts:
             if part.get('type') == 'tool_use':
                 function_calls.append(part)
@@ -169,7 +185,7 @@ class AnthropicClient(BaseMultimodalModel):
         # If there are function calls, execute them and continue the conversation
         if function_calls:
             logger.function_call(f"{len(function_calls)}: {function_calls}")
-            
+
             # Execute all function calls
             function_responses = []
             for func_call in function_calls:
@@ -177,7 +193,7 @@ class AnthropicClient(BaseMultimodalModel):
                 func_name = func_call['name']
                 func_args = func_call.get('input', {})
                 logger.debug(f"Calling {func_name} with args: {func_args}")
-                
+
                 result = self._execute_function_call(func_name, func_args)
                 function_responses.append({
                     "type": "tool_result",
@@ -185,33 +201,36 @@ class AnthropicClient(BaseMultimodalModel):
                     "content": str(result)
                 })
                 logger.debug(f"Function {func_name} completed")
-            
+
             #TODO: ordering
             assistant_content = thinking_parts + function_calls
-            
+
             # Text + thinking history
-            self.payload["messages"].append({
+            state.payload["messages"].append({
                 "content": assistant_content,
                 "role": "assistant"
             })
-            
+
             # Function response history
-            self.payload["messages"].append({
-                "content": function_responses, 
+            state.payload["messages"].append({
+                "content": function_responses,
                 "role": "user"
             })
-            
+
+            # Apply caching to the last block of the entire conversation
+            self._apply_cache_to_last_block(state.payload)
+
             # Apply rate limiting
-            self.rate_limiter.apply(self.payload)
+            self.rate_limiter.apply(state.payload)
 
             logger.debug("Making follow-up API request with function responses")
             try:
-                self.response = requests.post(self.endpoint, headers=self.headers, json=self.payload, timeout=600)
-                self.response.raise_for_status()
-                
-                input_tokens = self.get_token_usage(self.response).get("input_tokens", 0)
+                state.response = requests.post(state.endpoint, headers=state.headers, json=state.payload, timeout=600)
+                state.response.raise_for_status()
+
+                input_tokens = self.get_token_usage(state.response).get("input_tokens", 0)
                 self.rate_limiter.track(input_tokens)
-                
+
                 logger.debug("Follow-up API request successful")
             except requests.exceptions.Timeout:
                 logger.error("Follow-up API request timed out")
@@ -335,6 +354,26 @@ class Claude4OpusThinking(AnthropicClient):
     name = "Claude 4 Opus (Thinking)"
     model_identifier = "claude-opus-4-20250514"
     max_tokens = 32000
+    enable_thinking = True
+    rate_limit = 1
+    beta_header = "interleaved-thinking-2025-05-14,extended-cache-ttl-2025-04-11"
+    cache = True
+
+    tools = TOOLS_BASIC
+
+class Claude4_5SonnetThinking(AnthropicClient):
+    name = "Claude 4.5 Sonnet (Thinking)"
+    model_identifier = "claude-sonnet-4-5"
+    enable_thinking = True
+    rate_limit = 1
+    beta_header = "interleaved-thinking-2025-05-14,extended-cache-ttl-2025-04-11"
+    cache = True
+
+    tools = TOOLS_BASIC
+
+class Claude4_5OpusThinking(AnthropicClient):
+    name = "Claude 4.5 Opus (Thinking)"
+    model_identifier = "claude-opus-4-5"
     enable_thinking = True
     rate_limit = 1
     beta_header = "interleaved-thinking-2025-05-14,extended-cache-ttl-2025-04-11"
